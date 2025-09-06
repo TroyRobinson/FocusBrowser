@@ -28,8 +28,14 @@
 
       <section id="settings-view" class="settings hidden" aria-label="Settings">
         <div class="settings-header">
-          <h1 class="settings-title">Settings</h1>
-          <button id="back-button" class="icon-button" type="button" aria-label="Back">←</button>
+          <div class="settings-header-left">
+            <button id="back-button" class="icon-button" type="button" aria-label="Back">←</button>
+            <h1 class="settings-title">Settings</h1>
+          </div>
+          <div class="settings-header-right">
+            <label for="delay-input" class="settings-delay-label">Delay (min)</label>
+            <input id="delay-input" class="settings-delay-input" type="number" min="0" step="1" inputmode="numeric" />
+          </div>
         </div>
         <div class="settings-section">
           <h2 class="settings-subtitle">Allowed Domains</h2>

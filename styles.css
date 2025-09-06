@@ -126,6 +126,18 @@ webview#webview {
   margin-bottom: 12px;
 }
 
+.settings-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .settings-title {
   margin: 0;
   font-size: 20px;
@@ -136,6 +148,19 @@ webview#webview {
   border-radius: 10px;
   padding: 16px;
   background: var(--input-bg);
+}
+
+.settings-delay-label {
+  color: var(--muted);
+}
+
+.settings-delay-input {
+  width: 84px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--fg);
 }
 
 .settings-subtitle {
@@ -173,6 +198,17 @@ webview#webview {
 
 .domain-list .domain {
   color: var(--fg);
+}
+
+.domain-list .right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.domain-list .countdown {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .domain-list .remove {

@@ -23,12 +23,14 @@ const backBtn = document.getElementById('back-button');
 const settingsView = document.getElementById('settings-view');
 const webview = document.getElementById('webview');
 const banner = document.getElementById('banner');
+const delayInput = document.getElementById('delay-input');
 
 // Track last successfully allowed URL to keep the user in place on block
 let lastAllowedURL = 'about:blank';
 
 // Whitelist storage
 const WL_KEY = 'whitelist';
+const DELAY_KEY = 'whitelist_delay_minutes';
 
 function loadWhitelist() {
   try {
@@ -36,18 +38,51 @@ function loadWhitelist() {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    // normalize to lower-case hostnames
-    return parsed
-      .map((d) => String(d || '').trim().toLowerCase())
-      .filter((d) => d.length > 0);
+    const items = parsed
+      .map((v) => {
+        if (typeof v === 'string') return { domain: v.trim().toLowerCase(), activateAt: 0 };
+        if (v && typeof v === 'object' && typeof v.domain === 'string') {
+          const domain = v.domain.trim().toLowerCase();
+          const at = Number(v.activateAt || 0);
+          return { domain, activateAt: Number.isFinite(at) ? at : 0 };
+        }
+        return null;
+      })
+      .filter(Boolean);
+    const map = new Map();
+    for (const it of items) {
+      const ex = map.get(it.domain);
+      if (!ex || it.activateAt < ex.activateAt) map.set(it.domain, it);
+    }
+    return Array.from(map.values());
   } catch {
     return [];
   }
 }
 
 function saveWhitelist(list) {
-  const dedup = Array.from(new Set(list.map((d) => d.trim().toLowerCase())));
-  localStorage.setItem(WL_KEY, JSON.stringify(dedup));
+  const map = new Map();
+  for (const it of list) {
+    if (!it || !it.domain) continue;
+    const domain = String(it.domain).trim().toLowerCase();
+    const at = Number(it.activateAt || 0);
+    const norm = { domain, activateAt: Number.isFinite(at) ? at : 0 };
+    const ex = map.get(domain);
+    if (!ex || norm.activateAt < ex.activateAt) map.set(domain, norm);
+  }
+  localStorage.setItem(WL_KEY, JSON.stringify(Array.from(map.values())));
+}
+
+function getDelayMinutes() {
+  const raw = localStorage.getItem(DELAY_KEY);
+  const n = Math.max(0, Math.floor(Number(raw ?? 0)));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function setDelayMinutes(n) {
+  const v = Math.max(0, Math.floor(Number(n) || 0));
+  localStorage.setItem(DELAY_KEY, String(v));
+  if (delayInput) delayInput.value = String(v);
 }
 
 function extractHostname(input) {
@@ -75,11 +110,15 @@ function getRegistrableDomain(hostname) {
   return parts.slice(-2).join('.');
 }
 
+function isActive(item) {
+  return !item.activateAt || Date.now() >= item.activateAt;
+}
+
 function isHostAllowed(hostname) {
   if (!hostname) return false;
-  const list = loadWhitelist();
+  const list = loadWhitelist().filter(isActive);
   const host = hostname.toLowerCase();
-  return list.some((d) => host === d || host.endsWith(`.${d}`));
+  return list.some((it) => host === it.domain || host.endsWith(`.${it.domain}`));
 }
 
 function isUrlAllowed(urlStr) {
@@ -148,17 +187,7 @@ function showBlockedWithAdd(urlStr) {
     showActionBanner(
       `Blocked: ${host} is not in whitelist.`,
       `Add ${root}`,
-      () => {
-        const wl = loadWhitelist();
-        if (!wl.includes(root)) {
-          wl.push(root);
-          saveWhitelist(wl);
-          renderWhitelist();
-          showBanner(`Added ${root} to whitelist`);
-        } else {
-          showBanner(`${root} already whitelisted`);
-        }
-      },
+      () => addDomainWithDelay(root),
       'error',
       8000
     );
@@ -183,6 +212,33 @@ const addDomainForm = document.getElementById('add-domain-form');
 const domainInput = document.getElementById('domain-input');
 const domainList = document.getElementById('domain-list');
 
+function fmtRemaining(ms) {
+  if (ms <= 0) return '';
+  const totalSec = Math.ceil(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function hasPending(list) {
+  return list.some((it) => !isActive(it));
+}
+
+let countdownInterval = null;
+function startCountdown() {
+  if (countdownInterval) return;
+  countdownInterval = setInterval(() => {
+    if (!settingsView || settingsView.classList.contains('hidden')) return;
+    renderWhitelist();
+  }, 1000);
+}
+function stopCountdown() {
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
+}
+
 function renderWhitelist() {
   if (!domainList) return;
   const list = loadWhitelist();
@@ -191,25 +247,44 @@ function renderWhitelist() {
     const li = document.createElement('li');
     li.textContent = 'No domains added yet.';
     domainList.appendChild(li);
-    return;
-  }
-  list.forEach((domain) => {
-    const li = document.createElement('li');
-    const span = document.createElement('span');
-    span.className = 'domain';
-    span.textContent = domain;
-    const btn = document.createElement('button');
-    btn.className = 'remove';
-    btn.textContent = 'Remove';
-    btn.addEventListener('click', () => {
-      const next = loadWhitelist().filter((d) => d !== domain);
-      saveWhitelist(next);
-      renderWhitelist();
+  } else {
+    list.forEach((item) => {
+      const li = document.createElement('li');
+      const left = document.createElement('span');
+      left.className = 'domain';
+      left.textContent = item.domain;
+
+      const right = document.createElement('span');
+      right.className = 'right';
+      const remaining = (item.activateAt || 0) - Date.now();
+      if (remaining > 0) {
+        const cd = document.createElement('span');
+        cd.className = 'countdown';
+        cd.textContent = fmtRemaining(remaining);
+        right.appendChild(cd);
+      }
+
+      const btn = document.createElement('button');
+      btn.className = 'remove';
+      btn.textContent = 'Remove';
+      btn.addEventListener('click', () => {
+        const next = loadWhitelist().filter((d) => d.domain !== item.domain);
+        saveWhitelist(next);
+        renderWhitelist();
+      });
+      right.appendChild(btn);
+
+      li.appendChild(left);
+      li.appendChild(right);
+      domainList.appendChild(li);
     });
-    li.appendChild(span);
-    li.appendChild(btn);
-    domainList.appendChild(li);
-  });
+  }
+
+  if (settingsView && !settingsView.classList.contains('hidden') && hasPending(list)) {
+    startCountdown();
+  } else {
+    stopCountdown();
+  }
 }
 
 if (addDomainForm) {
@@ -221,13 +296,19 @@ if (addDomainForm) {
       return;
     }
     const wl = loadWhitelist();
-    if (wl.includes(host)) {
+    if (wl.some((it) => it.domain === host)) {
       showBanner('Domain already in whitelist');
     } else {
-      wl.push(host);
+      const delayMin = getDelayMinutes();
+      const activateAt = delayMin > 0 ? Date.now() + delayMin * 60 * 1000 : 0;
+      wl.push({ domain: host, activateAt });
       saveWhitelist(wl);
       renderWhitelist();
-      showBanner(`Added ${host} to whitelist`);
+      if (delayMin > 0) {
+        showBanner(`Added ${host}. Activates in ${delayMin} min`);
+      } else {
+        showBanner(`Added ${host} to whitelist`);
+      }
       domainInput.value = '';
     }
   });
@@ -236,11 +317,35 @@ if (addDomainForm) {
 settingsBtn?.addEventListener('click', () => {
   setSettingsVisible(true);
   renderWhitelist();
+  setDelayMinutes(getDelayMinutes());
 });
 
 backBtn?.addEventListener('click', () => {
   setSettingsVisible(false);
+  stopCountdown();
 });
+
+delayInput?.addEventListener('change', () => {
+  setDelayMinutes(delayInput.value);
+});
+
+function addDomainWithDelay(host) {
+  const wl = loadWhitelist();
+  if (wl.some((it) => it.domain === host)) {
+    showBanner(`${host} already whitelisted`);
+    return;
+  }
+  const delayMin = getDelayMinutes();
+  const activateAt = delayMin > 0 ? Date.now() + delayMin * 60 * 1000 : 0;
+  wl.push({ domain: host, activateAt });
+  saveWhitelist(wl);
+  renderWhitelist();
+  if (delayMin > 0) {
+    showBanner(`Added ${host}. Activates in ${delayMin} min`);
+  } else {
+    showBanner(`Added ${host} to whitelist`);
+  }
+}
 
 function navigate() {
   const target = normalizeToURL(input.value);
