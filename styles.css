@@ -90,6 +90,9 @@ webview#webview {
   border-radius: 8px;
   z-index: 2;
   max-width: 90vw;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .banner.error {
@@ -98,6 +101,15 @@ webview#webview {
 
 .hidden {
   display: none !important;
+}
+
+.banner .action-btn {
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--fg);
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
 }
 
 .settings {

@@ -24,6 +24,9 @@ const settingsView = document.getElementById('settings-view');
 const webview = document.getElementById('webview');
 const banner = document.getElementById('banner');
 
+// Track last successfully allowed URL to keep the user in place on block
+let lastAllowedURL = 'about:blank';
+
 // Whitelist storage
 const WL_KEY = 'whitelist';
 
@@ -58,6 +61,20 @@ function extractHostname(input) {
   }
 }
 
+// Heuristic to compute the registrable root domain for banner action
+function getRegistrableDomain(hostname) {
+  if (!hostname) return null;
+  const parts = hostname.split('.');
+  if (parts.length <= 2) return hostname;
+  const tld = parts[parts.length - 1];
+  const sld = parts[parts.length - 2];
+  const ccSecondLevels = new Set(['co', 'com', 'net', 'org', 'gov', 'edu', 'ac']);
+  if (tld.length === 2 && ccSecondLevels.has(sld)) {
+    return parts.slice(-3).join('.');
+  }
+  return parts.slice(-2).join('.');
+}
+
 function isHostAllowed(hostname) {
   if (!hostname) return false;
   const list = loadWhitelist();
@@ -78,15 +95,76 @@ function isUrlAllowed(urlStr) {
 }
 
 let bannerTimeout = null;
-function showBanner(message, kind = '') {
+function clearBanner() {
   if (!banner) return;
-  banner.textContent = message;
+  banner.classList.add('hidden');
+  banner.textContent = '';
+  banner.classList.remove('error');
+  if (bannerTimeout) clearTimeout(bannerTimeout);
+  bannerTimeout = null;
+}
+
+function showBanner(message, kind = '', durationMs = 2600) {
+  if (!banner) return;
   banner.classList.remove('hidden', 'error');
   if (kind) banner.classList.add(kind);
+  banner.textContent = '';
+  const span = document.createElement('span');
+  span.textContent = message;
+  banner.appendChild(span);
   if (bannerTimeout) clearTimeout(bannerTimeout);
   bannerTimeout = setTimeout(() => {
     banner.classList.add('hidden');
-  }, 2600);
+  }, durationMs);
+}
+
+function showActionBanner(message, actionLabel, onAction, kind = '', durationMs = 6000) {
+  if (!banner) return;
+  banner.classList.remove('hidden', 'error');
+  if (kind) banner.classList.add(kind);
+  banner.textContent = '';
+  const span = document.createElement('span');
+  span.textContent = message + ' ';
+  const btn = document.createElement('button');
+  btn.className = 'action-btn';
+  btn.type = 'button';
+  btn.textContent = actionLabel;
+  btn.addEventListener('click', () => {
+    try { onAction?.(); } finally { clearBanner(); }
+  });
+  banner.appendChild(span);
+  banner.appendChild(btn);
+  if (bannerTimeout) clearTimeout(bannerTimeout);
+  bannerTimeout = setTimeout(() => {
+    banner.classList.add('hidden');
+  }, durationMs);
+}
+
+function showBlockedWithAdd(urlStr) {
+  try {
+    const u = new URL(urlStr);
+    const host = u.hostname.toLowerCase();
+    const root = getRegistrableDomain(host);
+    showActionBanner(
+      `Blocked: ${host} is not in whitelist.`,
+      `Add ${root}`,
+      () => {
+        const wl = loadWhitelist();
+        if (!wl.includes(root)) {
+          wl.push(root);
+          saveWhitelist(wl);
+          renderWhitelist();
+          showBanner(`Added ${root} to whitelist`);
+        } else {
+          showBanner(`${root} already whitelisted`);
+        }
+      },
+      'error',
+      8000
+    );
+  } catch {
+    showBanner('Blocked: domain not in whitelist', 'error', 6000);
+  }
 }
 
 function setSettingsVisible(visible) {
@@ -168,7 +246,8 @@ function navigate() {
   const target = normalizeToURL(input.value);
   if (!target) return;
   if (!isUrlAllowed(target)) {
-    showBanner('Blocked: domain not in whitelist', 'error');
+    // Keep current page unchanged; offer to add domain
+    showBlockedWithAdd(target);
     return;
   }
   webview.src = target;
@@ -187,23 +266,30 @@ goBtn.addEventListener('click', (e) => {
 // Update address bar when navigation occurs
 webview?.addEventListener('did-navigate', (e) => {
   input.value = e.url || input.value;
+  if (e.url && isUrlAllowed(e.url)) {
+    lastAllowedURL = e.url;
+  }
 });
 webview?.addEventListener('did-navigate-in-page', (e) => {
   input.value = e.url || input.value;
+  if (e.url && isUrlAllowed(e.url)) {
+    lastAllowedURL = e.url;
+  }
 });
 
 // Enforce whitelist on navigations triggered inside webview
 webview?.addEventListener('will-navigate', (e) => {
   if (!isUrlAllowed(e.url)) {
     e.preventDefault();
-    showBanner('Blocked: domain not in whitelist', 'error');
+    // Keep current page; offer to add domain
+    showBlockedWithAdd(e.url);
   }
 });
 
 webview?.addEventListener('will-redirect', (e) => {
   if (!isUrlAllowed(e.url)) {
     e.preventDefault();
-    showBanner('Blocked: redirect to non-whitelisted domain', 'error');
+    showBlockedWithAdd(e.url);
   }
 });
 
@@ -213,17 +299,34 @@ webview?.addEventListener('new-window', (e) => {
   if (isUrlAllowed(e.url)) {
     webview.src = e.url;
   } else {
-    showBanner('Blocked: popup not in whitelist', 'error');
+    showBlockedWithAdd(e.url);
   }
 });
 
-// If initial src is not allowed, ensure we stay on about:blank
+// Fallback: ensure initial load respects whitelist but keep current page unchanged
 webview?.addEventListener('dom-ready', () => {
   try {
     const current = webview.getURL?.() || '';
     if (current && current !== 'about:blank' && !isUrlAllowed(current)) {
-      webview.src = 'about:blank';
-      showBanner('Blocked initial page: not in whitelist', 'error');
+      // Keep as-is, only inform and offer to add
+      showBlockedWithAdd(current);
+    }
+  } catch {
+    // ignore
+  }
+});
+
+// Fallback guard: if a navigation manages to start, stop and revert to last allowed
+webview?.addEventListener('did-start-navigation', (e) => {
+  try {
+    const { url, isMainFrame } = e;
+    if (!isMainFrame) return;
+    if (url && !isUrlAllowed(url)) {
+      webview.stop();
+      if (lastAllowedURL && webview.getURL?.() !== lastAllowedURL) {
+        webview.src = lastAllowedURL;
+      }
+      showBlockedWithAdd(url);
     }
   } catch {
     // ignore
