@@ -18,14 +18,34 @@
           aria-label="Address bar"
         />
         <button id="go-button" class="go-button" type="submit" aria-label="Go">Go</button>
+        <button id="settings-button" class="icon-button" type="button" aria-label="Settings">⚙︎</button>
       </form>
     </header>
 
     <main class="content">
-      <webview id="webview" src="https://example.com" allowpopups disableblinkfeatures="AutomationControlled"></webview>
+      <div id="banner" class="banner hidden" role="status"></div>
+      <webview id="webview" src="about:blank" disableblinkfeatures="AutomationControlled"></webview>
+
+      <section id="settings-view" class="settings hidden" aria-label="Settings">
+        <div class="settings-header">
+          <h1 class="settings-title">Settings</h1>
+          <button id="back-button" class="icon-button" type="button" aria-label="Back">←</button>
+        </div>
+        <div class="settings-section">
+          <h2 class="settings-subtitle">Allowed Domains</h2>
+          <p class="settings-help">
+            Only sites matching a listed domain are allowed.
+            Matching includes subdomains and sub-URLs by default.
+          </p>
+          <form id="add-domain-form" class="add-domain" autocomplete="off">
+            <input id="domain-input" class="address-input" type="text" placeholder="example.com" aria-label="Add domain" />
+            <button id="add-domain-button" class="go-button" type="submit">Add</button>
+          </form>
+          <ul id="domain-list" class="domain-list" aria-label="Whitelisted domains"></ul>
+        </div>
+      </section>
     </main>
 
     <script src="renderer.js" type="module"></script>
   </body>
   </html>
-

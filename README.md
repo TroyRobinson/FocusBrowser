@@ -12,4 +12,4 @@ Notes
 
 - No menus or keyboard shortcuts are registered; DevTools are disabled.
 - The address is normalized by adding https:// if no scheme is provided.
-
+- Only whitelisted domains can be visited. Click the settings button (gear icon) to add allowed domains. Matching includes subdomains and any paths by default (e.g., adding example.com allows app.example.com and example.com/docs).

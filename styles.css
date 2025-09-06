@@ -59,6 +59,15 @@ body {
   cursor: pointer;
 }
 
+.icon-button {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
 .content {
   position: relative;
   flex: 1;
@@ -69,3 +78,96 @@ webview#webview {
   inset: 0;
 }
 
+.banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #262a33;
+  color: var(--fg);
+  border: 1px solid var(--input-border);
+  padding: 8px 12px;
+  border-radius: 8px;
+  z-index: 2;
+  max-width: 90vw;
+}
+
+.banner.error {
+  border-color: #d9534f;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.settings {
+  position: absolute;
+  inset: 0;
+  padding: 20px;
+  overflow: auto;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.settings-title {
+  margin: 0;
+  font-size: 20px;
+}
+
+.settings-section {
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  padding: 16px;
+  background: var(--input-bg);
+}
+
+.settings-subtitle {
+  margin-top: 0;
+}
+
+.settings-help {
+  color: var(--muted);
+}
+
+.add-domain {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+
+.domain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.domain-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: #12151b;
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+}
+
+.domain-list .domain {
+  color: var(--fg);
+}
+
+.domain-list .remove {
+  border: 1px solid var(--input-border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
