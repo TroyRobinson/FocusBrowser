@@ -1,0 +1,71 @@
+:root {
+  --bg: #0f1115;
+  --fg: #e6e8ee;
+  --muted: #a0a4b1;
+  --accent: #4f7cff;
+  --input-bg: #171a21;
+  --input-border: #252a33;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  border-bottom: 1px solid var(--input-border);
+  background: rgba(10, 12, 16, 0.8);
+  backdrop-filter: saturate(120%) blur(6px);
+}
+
+.address-form {
+  display: flex;
+  gap: 8px;
+  width: min(800px, 90vw);
+}
+
+.address-input {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--fg);
+  outline: none;
+}
+
+.address-input::placeholder {
+  color: var(--muted);
+}
+
+.go-button {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border);
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}
+
+.content {
+  position: relative;
+  flex: 1;
+}
+
+webview#webview {
+  position: absolute;
+  inset: 0;
+}
+

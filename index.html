@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Focus Browser</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <form id="address-form" class="address-form" autocomplete="off">
+        <input
+          id="address-input"
+          class="address-input"
+          type="text"
+          placeholder="Enter address (e.g., example.com)"
+          spellcheck="false"
+          aria-label="Address bar"
+        />
+        <button id="go-button" class="go-button" type="submit" aria-label="Go">Go</button>
+      </form>
+    </header>
+
+    <main class="content">
+      <webview id="webview" src="https://example.com" allowpopups disableblinkfeatures="AutomationControlled"></webview>
+    </main>
+
+    <script src="renderer.js" type="module"></script>
+  </body>
+  </html>
+
