@@ -163,6 +163,31 @@ webview#webview {
   color: var(--fg);
 }
 
+.save-button {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.save-button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.save-button.danger {
+  background: #8b1e23;
+  border-color: #b23a3f;
+  color: #fff;
+}
+
+.delay-countdown {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .settings-subtitle {
   margin-top: 0;
 }

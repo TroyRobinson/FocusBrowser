@@ -24,6 +24,8 @@ const settingsView = document.getElementById('settings-view');
 const webview = document.getElementById('webview');
 const banner = document.getElementById('banner');
 const delayInput = document.getElementById('delay-input');
+const delaySaveBtn = document.getElementById('delay-save-button');
+const delayCountdownEl = document.getElementById('delay-countdown');
 
 // Track last successfully allowed URL to keep the user in place on block
 let lastAllowedURL = 'about:blank';
@@ -31,6 +33,8 @@ let lastAllowedURL = 'about:blank';
 // Whitelist storage
 const WL_KEY = 'whitelist';
 const DELAY_KEY = 'whitelist_delay_minutes';
+const DELAY_PENDING_MIN_KEY = 'whitelist_delay_pending_minutes';
+const DELAY_PENDING_AT_KEY = 'whitelist_delay_pending_activate_at';
 
 function loadWhitelist() {
   try {
@@ -73,16 +77,74 @@ function saveWhitelist(list) {
   localStorage.setItem(WL_KEY, JSON.stringify(Array.from(map.values())));
 }
 
-function getDelayMinutes() {
-  const raw = localStorage.getItem(DELAY_KEY);
-  const n = Math.max(0, Math.floor(Number(raw ?? 0)));
-  return Number.isFinite(n) ? n : 0;
+function sanitizeDelay(n) {
+  const v = Math.max(0, Math.floor(Number(n ?? 0)));
+  return Number.isFinite(v) ? v : 0;
 }
 
-function setDelayMinutes(n) {
-  const v = Math.max(0, Math.floor(Number(n) || 0));
+function getPendingDelay() {
+  try {
+    const minRaw = localStorage.getItem(DELAY_PENDING_MIN_KEY);
+    const atRaw = localStorage.getItem(DELAY_PENDING_AT_KEY);
+    if (minRaw == null || atRaw == null) return null;
+    const minutes = sanitizeDelay(minRaw);
+    const activateAt = Number(atRaw);
+    if (!Number.isFinite(activateAt) || activateAt <= Date.now()) return null;
+    return { minutes, activateAt };
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingDelay() {
+  localStorage.removeItem(DELAY_PENDING_MIN_KEY);
+  localStorage.removeItem(DELAY_PENDING_AT_KEY);
+}
+
+function setEffectiveDelayMinutes(n) {
+  const v = sanitizeDelay(n);
   localStorage.setItem(DELAY_KEY, String(v));
-  if (delayInput) delayInput.value = String(v);
+}
+
+function promotePendingIfDue() {
+  try {
+    const atRaw = localStorage.getItem(DELAY_PENDING_AT_KEY);
+    const minRaw = localStorage.getItem(DELAY_PENDING_MIN_KEY);
+    if (atRaw == null || minRaw == null) return false;
+    const at = Number(atRaw);
+    if (!Number.isFinite(at)) { clearPendingDelay(); return false; }
+    if (Date.now() >= at) {
+      const minutes = sanitizeDelay(minRaw);
+      setEffectiveDelayMinutes(minutes);
+      clearPendingDelay();
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function getDelayMinutes() {
+  // Returns the current effective delay; promotes pending if due.
+  promotePendingIfDue();
+  const raw = localStorage.getItem(DELAY_KEY);
+  return sanitizeDelay(raw);
+}
+
+function schedulePendingDelay(newMinutes) {
+  const effective = getDelayMinutes();
+  const next = sanitizeDelay(newMinutes);
+  if (effective === 0) {
+    // Immediate effect, no countdown
+    setEffectiveDelayMinutes(next);
+    clearPendingDelay();
+    return { immediate: true };
+  }
+  const activateAt = Date.now() + effective * 60 * 1000;
+  localStorage.setItem(DELAY_PENDING_MIN_KEY, String(next));
+  localStorage.setItem(DELAY_PENDING_AT_KEY, String(activateAt));
+  return { immediate: false, activateAt };
 }
 
 function extractHostname(input) {
@@ -238,6 +300,7 @@ function startCountdown() {
   countdownInterval = setInterval(() => {
     if (!settingsView || settingsView.classList.contains('hidden')) return;
     renderWhitelist();
+    renderDelayControls?.();
   }, 1000);
 }
 function stopCountdown() {
@@ -288,11 +351,7 @@ function renderWhitelist() {
     });
   }
 
-  if (settingsView && !settingsView.classList.contains('hidden') && hasPending(list)) {
-    startCountdown();
-  } else {
-    stopCountdown();
-  }
+  // Countdown interval is managed by settings open/close.
 }
 
 if (addDomainForm) {
@@ -325,7 +384,8 @@ if (addDomainForm) {
 settingsBtn?.addEventListener('click', () => {
   setSettingsVisible(true);
   renderWhitelist();
-  setDelayMinutes(getDelayMinutes());
+  initDelayControls?.();
+  startCountdown();
 });
 
 backBtn?.addEventListener('click', () => {
@@ -333,8 +393,117 @@ backBtn?.addEventListener('click', () => {
   stopCountdown();
 });
 
-delayInput?.addEventListener('change', () => {
-  setDelayMinutes(delayInput.value);
+// Delay settings controls
+let delayInputDirty = false;
+function updateSaveButtonState() {
+  if (!delaySaveBtn || !delayInput) return;
+  const effective = getDelayMinutes();
+  const pending = getPendingDelay();
+  const valStr = String(delayInput.value ?? '').trim();
+  if (valStr === '') { delaySaveBtn.disabled = true; return; }
+  const next = sanitizeDelay(valStr);
+  const equalsEffective = next === effective;
+  const equalsPending = pending ? next === sanitizeDelay(pending.minutes) : false;
+  delaySaveBtn.disabled = equalsEffective || equalsPending;
+}
+
+function initDelayControls() {
+  delayInputDirty = false;
+  if (delayInput) delayInput.value = String(getDelayMinutes());
+  updateSaveButtonState();
+  renderDelayControls();
+}
+
+let delayCancelHover = false;
+function renderDelayControls() {
+  const promoted = promotePendingIfDue();
+  const effective = getDelayMinutes();
+  const pending = getPendingDelay();
+  // Update save button label to reflect pending target minutes
+  if (delaySaveBtn) {
+    delaySaveBtn.classList.remove('danger');
+    if (pending) {
+      if (delayCancelHover) {
+        delaySaveBtn.textContent = `Cancel (${sanitizeDelay(pending.minutes)})`;
+        delaySaveBtn.classList.add('danger');
+      } else {
+        delaySaveBtn.textContent = `Saving (${sanitizeDelay(pending.minutes)})`;
+      }
+    } else {
+      delaySaveBtn.textContent = 'Save';
+    }
+  }
+  if (delayCountdownEl) {
+    if (pending) {
+      const remaining = Math.max(0, pending.activateAt - Date.now());
+      const label = fmtRemaining(remaining) || '0:00';
+      delayCountdownEl.textContent = label;
+      delayCountdownEl.classList.remove('hidden');
+    } else {
+      delayCountdownEl.textContent = '';
+      delayCountdownEl.classList.add('hidden');
+    }
+  }
+  if (promoted) {
+    delayInputDirty = false;
+  }
+  if (!delayInputDirty && delayInput) {
+    delayInput.value = String(effective);
+  }
+  updateSaveButtonState();
+  // While hovering cancel, make the button clickable regardless of save state
+  if (delaySaveBtn && pending && delayCancelHover) {
+    delaySaveBtn.disabled = false;
+  }
+}
+
+delayInput?.addEventListener('input', () => {
+  delayInputDirty = true;
+  updateSaveButtonState();
+});
+
+delaySaveBtn?.addEventListener('click', () => {
+  if (!delayInput) return;
+  const pending = getPendingDelay();
+  if (pending && delayCancelHover) {
+    // Cancel pending change
+    clearPendingDelay();
+    showBanner('Pending delay change canceled');
+    delayCancelHover = false;
+    delayInputDirty = false;
+    if (delayInput) delayInput.value = String(getDelayMinutes());
+    renderDelayControls();
+    updateSaveButtonState();
+    return;
+  }
+  const valStr = String(delayInput.value ?? '').trim();
+  const next = sanitizeDelay(valStr);
+  const result = schedulePendingDelay(next);
+  if (result.immediate) {
+    showBanner('Delay updated');
+  } else {
+    const effective = getDelayMinutes();
+    const mins = effective;
+    showBanner(`Delay change saved. Activates in ${mins} min`);
+  }
+  delayInputDirty = false;
+  if (delayInput) delayInput.value = String(getDelayMinutes());
+  renderDelayControls();
+  updateSaveButtonState();
+});
+
+delaySaveBtn?.addEventListener('mouseenter', () => {
+  if (getPendingDelay()) {
+    delayCancelHover = true;
+    renderDelayControls();
+  }
+});
+
+delaySaveBtn?.addEventListener('mouseleave', () => {
+  if (delayCancelHover) {
+    delayCancelHover = false;
+    renderDelayControls();
+  }
 });
 
 function addDomainWithDelay(host) {
