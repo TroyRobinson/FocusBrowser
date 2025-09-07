@@ -26,6 +26,9 @@ const banner = document.getElementById('banner');
 const delayInput = document.getElementById('delay-input');
 const delaySaveBtn = document.getElementById('delay-save-button');
 const delayCountdownEl = document.getElementById('delay-countdown');
+const extensionsBtn = document.getElementById('extensions-button');
+const extensionsPopover = document.getElementById('extensions-popover');
+const uboToggle = document.getElementById('ubo-toggle');
 
 // Track last successfully allowed URL to keep the user in place on block
 let lastAllowedURL = 'about:blank';
@@ -614,3 +617,53 @@ webview?.addEventListener('did-start-navigation', (e) => {
     // ignore
   }
 });
+
+// --- Extensions (uBlock) UI ---
+function hideExtensionsPopover() {
+  if (extensionsPopover) extensionsPopover.classList.add('hidden');
+}
+
+function toggleExtensionsPopover() {
+  if (!extensionsPopover) return;
+  const isHidden = extensionsPopover.classList.contains('hidden');
+  if (isHidden) {
+    extensionsPopover.classList.remove('hidden');
+  } else {
+    extensionsPopover.classList.add('hidden');
+  }
+}
+
+async function refreshUboToggle() {
+  try {
+    const state = await window.adblock?.getState?.();
+    const enabled = !!state?.enabled;
+    if (uboToggle) uboToggle.checked = enabled;
+  } catch {
+    if (uboToggle) uboToggle.checked = false;
+  }
+}
+
+extensionsBtn?.addEventListener('click', async (e) => {
+  e.preventDefault();
+  toggleExtensionsPopover();
+  await refreshUboToggle();
+});
+
+uboToggle?.addEventListener('change', async () => {
+  try {
+    const next = !!uboToggle.checked;
+    await window.adblock?.setEnabled?.(next);
+  } catch {}
+});
+
+// Close popover on outside click
+document.addEventListener('click', (e) => {
+  if (!extensionsPopover || !extensionsBtn) return;
+  const target = e.target;
+  if (!(target instanceof Node)) return;
+  if (extensionsPopover.contains(target) || extensionsBtn.contains(target)) return;
+  hideExtensionsPopover();
+});
+
+// Ensure initial state is synced
+refreshUboToggle();

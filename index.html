@@ -18,11 +18,25 @@
           aria-label="Address bar"
         />
         <button id="go-button" class="go-button" type="submit" aria-label="Go">Go</button>
+        <button id="extensions-button" class="icon-button" type="button" aria-label="Extensions">🧩</button>
         <button id="settings-button" class="icon-button" type="button" aria-label="Settings">⚙︎</button>
       </form>
     </header>
 
     <main class="content">
+      <div id="extensions-popover" class="extensions-popover hidden" role="dialog" aria-label="Extensions">
+        <div class="extensions-item">
+          <span class="ext-icon">⛔</span>
+          <div class="ext-meta">
+            <div class="ext-title">uBlock Origin</div>
+            <div class="ext-subtitle">Content blocker</div>
+          </div>
+          <label class="switch">
+            <input id="ubo-toggle" type="checkbox" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
       <div id="banner" class="banner hidden" role="status"></div>
       <webview id="webview" src="about:blank" disableblinkfeatures="AutomationControlled"></webview>
 

@@ -12,5 +12,10 @@
   "description": "",
   "devDependencies": {
     "electron": "^27.3.11"
+  },
+  "dependencies": {
+    "@cliqz/adblocker-content": "^1.34.0",
+    "@cliqz/adblocker-electron": "^1.34.0",
+    "cross-fetch": "^4.1.0"
   }
 }
