@@ -184,13 +184,21 @@ function showBlockedWithAdd(urlStr) {
     const u = new URL(urlStr);
     const host = u.hostname.toLowerCase();
     const root = getRegistrableDomain(host);
-    showActionBanner(
-      `Blocked: ${host} is not in whitelist.`,
-      `Add ${root}`,
-      () => addDomainWithDelay(root),
-      'error',
-      8000
-    );
+    const wl = loadWhitelist();
+    const pending = wl.find((it) => (host === it.domain || host.endsWith(`.${it.domain}`)) && !isActive(it));
+    if (pending) {
+      const remaining = Math.max(0, (pending.activateAt || 0) - Date.now());
+      const label = fmtRemaining(remaining) || 'Less than 1s';
+      showBanner(`${label} left until active`, 'error', 8000);
+    } else {
+      showActionBanner(
+        `Blocked: ${host} is not in whitelist.`,
+        `Add ${root}`,
+        () => addDomainWithDelay(root),
+        'error',
+        8000
+      );
+    }
   } catch {
     showBanner('Blocked: domain not in whitelist', 'error', 6000);
   }
