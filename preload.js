@@ -24,4 +24,19 @@ if (contextBridge && ipcRenderer) {
       }
     },
   });
+
+  // Navigation shortcut bridge
+  contextBridge.exposeInMainWorld('nav', {
+    onNavigate: (handler) => {
+      try {
+        if (typeof handler !== 'function') return;
+        const listener = (_evt, action) => {
+          try { handler(action); } catch {}
+        };
+        ipcRenderer.on('nav:action', listener);
+        // Return a simple unsubscribe if needed
+        return () => ipcRenderer.removeListener('nav:action', listener);
+      } catch {}
+    }
+  });
 }

@@ -65,6 +65,34 @@ function createWindow() {
     mainWindow.show();
   });
 
+  // Keyboard shortcuts: Cmd/Ctrl + ArrowLeft/ArrowRight, Cmd/Ctrl + R, Cmd/Ctrl + L, Esc (stop)
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    try {
+      const key = input.key;
+      // Esc: stop loading (no modifier)
+      if (key === 'Escape') {
+        // Do not prevent default to avoid interfering with page ESC usage
+        mainWindow?.webContents?.send('nav:action', 'stop');
+        return;
+      }
+      const mod = input.control || input.meta;
+      if (!mod) return;
+      if (key === 'ArrowLeft') {
+        event.preventDefault();
+        mainWindow?.webContents?.send('nav:action', 'back');
+      } else if (key === 'ArrowRight') {
+        event.preventDefault();
+        mainWindow?.webContents?.send('nav:action', 'forward');
+      } else if (key === 'r' || key === 'R') {
+        event.preventDefault();
+        mainWindow?.webContents?.send('nav:action', 'refresh');
+      } else if (key === 'l' || key === 'L') {
+        event.preventDefault();
+        mainWindow?.webContents?.send('nav:action', 'focus-address');
+      }
+    } catch {}
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -89,6 +117,31 @@ app.whenReady().then(() => {
     try {
       if (adblockEnabled && blocker) {
         enableBlockingIn(contents.session);
+      }
+      // Forward shortcuts when focus is inside a webview
+      if (contents.getType && contents.getType() === 'webview') {
+        contents.on('before-input-event', (event, input) => {
+          try {
+            const key = input.key;
+            const mod = input.control || input.meta;
+            if (mod && key === 'ArrowLeft') {
+              event.preventDefault();
+              mainWindow?.webContents?.send('nav:action', 'back');
+            } else if (mod && key === 'ArrowRight') {
+              event.preventDefault();
+              mainWindow?.webContents?.send('nav:action', 'forward');
+            } else if (mod && (key === 'r' || key === 'R')) {
+              event.preventDefault();
+              mainWindow?.webContents?.send('nav:action', 'refresh');
+            } else if (mod && (key === 'l' || key === 'L')) {
+              event.preventDefault();
+              mainWindow?.webContents?.send('nav:action', 'focus-address');
+            } else if (key === 'Escape') {
+              // Let the page also handle ESC; just forward stop
+              mainWindow?.webContents?.send('nav:action', 'stop');
+            }
+          } catch {}
+        });
       }
     } catch {}
   });

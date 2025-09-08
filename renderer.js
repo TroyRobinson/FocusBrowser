@@ -20,6 +20,15 @@ const input = document.getElementById('address-input');
 const goBtn = document.getElementById('go-button');
 const settingsBtn = document.getElementById('settings-button');
 const backBtn = document.getElementById('back-button');
+const navBackBtn = document.getElementById('nav-back-button');
+const navForwardBtn = document.getElementById('nav-forward-button');
+const navRefreshBtn = document.getElementById('nav-refresh-button');
+const loadingBar = document.getElementById('loading-bar');
+const suggestionsEl = document.getElementById('address-suggestions');
+let isLoading = false;
+let loadingInterval = null;
+let loadingProgress = 0; // 0..100
+let indeterminateTimer = null;
 const settingsView = document.getElementById('settings-view');
 const webview = document.getElementById('webview');
 const banner = document.getElementById('banner');
@@ -508,6 +517,57 @@ delaySaveBtn?.addEventListener('mouseleave', () => {
     renderDelayControls();
   }
 });
+// Address bar typing -> suggestions
+input?.addEventListener('input', () => {
+  renderSuggestions();
+});
+
+input?.addEventListener('focus', () => {
+  if (String(input.value || '').trim()) renderSuggestions();
+});
+
+input?.addEventListener('keydown', (e) => {
+  if (!suggestionsEl || suggestionsEl.classList.contains('hidden')) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (suggItems.length > 0) {
+      suggSelected = Math.min(suggItems.length - 1, (suggSelected < 0 ? 0 : suggSelected + 1));
+      updateSuggestionSelection();
+    }
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (suggItems.length > 0) {
+      suggSelected = Math.max(0, (suggSelected < 0 ? 0 : suggSelected - 1));
+      updateSuggestionSelection();
+    }
+  } else if (e.key === 'Enter') {
+    if (suggSelected > 0) {
+      e.preventDefault();
+      acceptSuggestion(suggSelected);
+    }
+  } else if (e.key === 'Tab') {
+    if (suggSelected >= 0) {
+      e.preventDefault();
+      acceptSuggestion(suggSelected);
+    }
+  } else if (e.key === 'Escape') {
+    // Hide suggestions on Esc
+    hideSuggestions();
+  }
+});
+
+window.addEventListener('resize', () => {
+  if (!suggestionsEl || suggestionsEl.classList.contains('hidden')) return;
+  updateSuggestionsPosition();
+});
+
+document.addEventListener('click', (e) => {
+  if (!suggestionsEl) return;
+  const target = e.target;
+  if (!(target instanceof Node)) return;
+  if (suggestionsEl.contains(target) || input.contains(target)) return;
+  hideSuggestions();
+});
 
 function addDomainWithDelay(host) {
   const wl = loadWhitelist();
@@ -548,18 +608,275 @@ goBtn.addEventListener('click', (e) => {
   navigate();
 });
 
+// --- Navigation buttons (Back/Forward) ---
+function updateNavButtons() {
+  try {
+    const canBack = !!webview?.canGoBack?.();
+    const canFwd = !!webview?.canGoForward?.();
+    if (navBackBtn) navBackBtn.disabled = !canBack;
+    if (navForwardBtn) navForwardBtn.disabled = !canFwd;
+  } catch {
+    if (navBackBtn) navBackBtn.disabled = true;
+    if (navForwardBtn) navForwardBtn.disabled = true;
+  }
+}
+
+function updateRefreshButtonUI() {
+  if (!navRefreshBtn) return;
+  try {
+    // If webview exposes isLoading(), prefer it to our flag
+    const loading = typeof webview?.isLoading === 'function' ? !!webview.isLoading() : !!isLoading;
+    if (loading) {
+      navRefreshBtn.textContent = '⨯';
+      navRefreshBtn.classList.add('danger');
+      navRefreshBtn.setAttribute('aria-label', 'Stop');
+      navRefreshBtn.setAttribute('title', 'Stop (Esc)');
+    } else {
+      navRefreshBtn.textContent = '⟳';
+      navRefreshBtn.classList.remove('danger');
+      navRefreshBtn.setAttribute('aria-label', 'Refresh');
+      navRefreshBtn.setAttribute('title', 'Refresh (⌘/Ctrl+R)');
+    }
+  } catch {}
+}
+
+// --- Address suggestions (whitelist fuzzy match) ---
+let suggItems = [];
+let suggSelected = -1; // -1 none, 0 is typed text
+
+function updateSuggestionsPosition() {
+  if (!suggestionsEl || !input) return;
+  const content = document.querySelector('.content');
+  if (!content) return;
+  const ib = input.getBoundingClientRect();
+  const cb = content.getBoundingClientRect();
+  const left = ib.left - cb.left;
+  const top = Math.max(6, ib.bottom - cb.top + 6);
+  suggestionsEl.style.left = `${left}px`;
+  suggestionsEl.style.top = `${top}px`;
+  suggestionsEl.style.width = `${ib.width}px`;
+}
+
+function hideSuggestions() {
+  if (!suggestionsEl) return;
+  suggestionsEl.classList.add('hidden');
+  suggestionsEl.innerHTML = '';
+  suggItems = [];
+  suggSelected = -1;
+}
+
+function updateSuggestionSelection() {
+  if (!suggestionsEl) return;
+  const children = Array.from(suggestionsEl.children);
+  children.forEach((el, i) => {
+    if (i === suggSelected) el.classList.add('selected');
+    else el.classList.remove('selected');
+    el.setAttribute('aria-selected', i === suggSelected ? 'true' : 'false');
+  });
+}
+
+function acceptSuggestion(idx) {
+  if (!suggItems[idx]) return;
+  const it = suggItems[idx];
+  input.value = it.value;
+  hideSuggestions();
+  if (idx === 0) {
+    form.requestSubmit?.();
+  } else {
+    navigate();
+  }
+}
+
+function fuzzyMatch(query, candidate) {
+  const q = String(query || '').toLowerCase();
+  const c = String(candidate || '').toLowerCase();
+  if (!q || !c) return { score: -1, indices: [] };
+  // startsWith -> best score, highlight leading range
+  if (c.startsWith(q)) {
+    const indices = Array.from({ length: q.length }, (_, i) => i);
+    return { score: 200 + q.length * 5, indices };
+  }
+  // substring match -> good score, highlight contiguous range
+  const subIdx = c.indexOf(q);
+  if (subIdx >= 0) {
+    const indices = Array.from({ length: q.length }, (_, i) => subIdx + i);
+    return { score: 120 + q.length * 3 - subIdx, indices };
+  }
+  // subsequence match -> lower score, highlight matched positions
+  let last = -1; let score = 0; let seq = 0; const indices = [];
+  for (let i = 0; i < q.length; i++) {
+    const ch = q[i];
+    const pos = c.indexOf(ch, last + 1);
+    if (pos === -1) return { score: -1, indices: [] };
+    if (pos === last + 1) { seq++; score += 5; } else { seq = 0; score += 1; }
+    indices.push(pos);
+    last = pos;
+  }
+  score += Math.max(0, 20 - (c.indexOf(q[0]) || 0));
+  return { score, indices };
+}
+
+function renderHighlightedText(text, indices) {
+  const frag = document.createDocumentFragment();
+  const set = new Set(indices || []);
+  let run = '';
+  let inStrong = false;
+  for (let i = 0; i < text.length; i++) {
+    const isMatch = set.has(i);
+    if (isMatch) {
+      if (run && !inStrong) { frag.appendChild(document.createTextNode(run)); run = ''; }
+      if (!inStrong) { inStrong = true; }
+      run += text[i];
+    } else {
+      if (run && inStrong) {
+        const strong = document.createElement('strong');
+        strong.className = 'match';
+        strong.textContent = run;
+        frag.appendChild(strong);
+        run = '';
+        inStrong = false;
+      }
+      run += text[i];
+    }
+  }
+  if (run) {
+    if (inStrong) {
+      const strong = document.createElement('strong');
+      strong.className = 'match';
+      strong.textContent = run;
+      frag.appendChild(strong);
+    } else {
+      frag.appendChild(document.createTextNode(run));
+    }
+  }
+  return frag;
+}
+
+function renderSuggestions() {
+  if (!suggestionsEl || !input) return;
+  const q = String(input.value || '').trim();
+  if (!q) { hideSuggestions(); return; }
+  const list = loadWhitelist();
+  const candidates = Array.from(new Set(list.map((it) => it?.domain).filter(Boolean)));
+  const scored = candidates
+    .map((c) => ({ c, m: fuzzyMatch(q, c) }))
+    .filter((it) => it.m.score >= 0)
+    .sort((a, b) => b.m.score - a.m.score)
+    .slice(0, 8);
+  const items = [
+    { value: q, label: q, typed: true },
+    ...scored.map((it) => ({ value: it.c, label: it.c, matches: it.m.indices }))
+  ];
+  suggItems = items;
+  suggSelected = 0;
+  suggestionsEl.innerHTML = '';
+  items.forEach((it, idx) => {
+    const li = document.createElement('li');
+    li.setAttribute('role', 'option');
+    if (idx === suggSelected) li.classList.add('selected');
+    if (it.typed) {
+      li.textContent = it.label;
+    } else {
+      li.innerHTML = '';
+      li.appendChild(renderHighlightedText(String(it.label), it.matches));
+    }
+    li.addEventListener('mouseenter', () => { suggSelected = idx; updateSuggestionSelection(); });
+    li.addEventListener('mousedown', (e) => { e.preventDefault(); acceptSuggestion(idx); });
+    suggestionsEl.appendChild(li);
+  });
+  updateSuggestionsPosition();
+  suggestionsEl.classList.remove('hidden');
+}
+
+function startLoadingBar() {
+  if (!loadingBar) return;
+  try {
+    loadingBar.classList.remove('hidden');
+    loadingProgress = 0;
+    loadingBar.style.width = '0%';
+    if (loadingInterval) clearInterval(loadingInterval);
+    // Increment progress toward 85% while loading
+    loadingInterval = setInterval(() => {
+      // Ease towards 85%
+      const target = 85;
+      const delta = Math.max(0.5, (target - loadingProgress) * 0.06);
+      loadingProgress = Math.min(target, loadingProgress + delta);
+      loadingBar.style.width = `${loadingProgress}%`;
+    }, 120);
+    if (indeterminateTimer) clearTimeout(indeterminateTimer);
+    indeterminateTimer = setTimeout(() => {
+      try {
+        if (loadingInterval) { clearInterval(loadingInterval); loadingInterval = null; }
+        loadingProgress = Math.max(loadingProgress, 90);
+        loadingBar.style.width = `${loadingProgress}%`;
+        loadingBar.classList.add('indeterminate');
+      } catch {}
+    }, 2000);
+  } catch {}
+}
+
+function finishLoadingBar() {
+  if (!loadingBar) return;
+  try {
+    if (loadingInterval) {
+      clearInterval(loadingInterval);
+      loadingInterval = null;
+    }
+    if (indeterminateTimer) { clearTimeout(indeterminateTimer); indeterminateTimer = null; }
+    loadingBar.classList.remove('indeterminate');
+    loadingBar.classList.add('near-done');
+    loadingProgress = 100;
+    loadingBar.style.width = '100%';
+    // Hide after transition
+    setTimeout(() => {
+      loadingBar.classList.add('hidden');
+      loadingBar.classList.remove('near-done');
+      loadingBar.style.width = '0%';
+      loadingProgress = 0;
+    }, 220);
+  } catch {}
+}
+
+navBackBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  try { if (webview?.canGoBack?.()) webview.goBack(); } catch {}
+});
+
+navForwardBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  try { if (webview?.canGoForward?.()) webview.goForward(); } catch {}
+});
+
+navRefreshBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  try {
+    const loading = typeof webview?.isLoading === 'function' ? !!webview.isLoading() : !!isLoading;
+    if (loading) {
+      webview?.stop?.();
+    } else {
+      webview?.reload?.();
+    }
+  } catch {}
+});
+
 // Update address bar when navigation occurs
 webview?.addEventListener('did-navigate', (e) => {
   input.value = e.url || input.value;
   if (e.url && isUrlAllowed(e.url)) {
     lastAllowedURL = e.url;
   }
+  updateNavButtons();
+  updateRefreshButtonUI();
+  finishLoadingBar();
 });
 webview?.addEventListener('did-navigate-in-page', (e) => {
   input.value = e.url || input.value;
   if (e.url && isUrlAllowed(e.url)) {
     lastAllowedURL = e.url;
   }
+  updateNavButtons();
+  updateRefreshButtonUI();
+  finishLoadingBar();
 });
 
 // Enforce whitelist on navigations triggered inside webview
@@ -599,6 +916,9 @@ webview?.addEventListener('dom-ready', () => {
   } catch {
     // ignore
   }
+  updateNavButtons();
+  updateRefreshButtonUI();
+  finishLoadingBar();
 });
 
 // Fallback guard: if a navigation manages to start, stop and revert to last allowed
@@ -616,6 +936,24 @@ webview?.addEventListener('did-start-navigation', (e) => {
   } catch {
     // ignore
   }
+  updateNavButtons();
+});
+
+// Loading state to toggle Refresh/Stop
+webview?.addEventListener('did-start-loading', () => {
+  isLoading = true;
+  updateRefreshButtonUI();
+  startLoadingBar();
+});
+webview?.addEventListener('did-stop-loading', () => {
+  isLoading = false;
+  updateRefreshButtonUI();
+  finishLoadingBar();
+});
+webview?.addEventListener('did-fail-load', () => {
+  isLoading = false;
+  updateRefreshButtonUI();
+  finishLoadingBar();
 });
 
 // --- Extensions (uBlock) UI ---
@@ -667,3 +1005,36 @@ document.addEventListener('click', (e) => {
 
 // Ensure initial state is synced
 refreshUboToggle();
+updateNavButtons();
+updateRefreshButtonUI();
+
+// Keyboard shortcuts from main process
+try {
+  window.nav?.onNavigate?.((action) => {
+    switch (action) {
+      case 'back':
+        try { if (webview?.canGoBack?.()) webview.goBack(); } catch {}
+        break;
+      case 'forward':
+        try { if (webview?.canGoForward?.()) webview.goForward(); } catch {}
+        break;
+      case 'refresh':
+        try { webview?.reload?.(); } catch {}
+        break;
+      case 'stop':
+        try {
+          const loading = typeof webview?.isLoading === 'function' ? !!webview.isLoading() : !!isLoading;
+          if (loading) webview?.stop?.();
+        } catch {}
+        break;
+      case 'focus-address':
+        try {
+          input?.focus?.();
+          input?.select?.();
+        } catch {}
+        break;
+      default:
+        break;
+    }
+  });
+} catch {}

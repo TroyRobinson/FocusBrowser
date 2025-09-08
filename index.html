@@ -8,7 +8,11 @@
   </head>
   <body>
     <header class="topbar">
+      <div id="loading-bar" class="loading-bar hidden" aria-hidden="true"></div>
       <form id="address-form" class="address-form" autocomplete="off">
+        <button id="nav-back-button" class="icon-button" type="button" aria-label="Back" title="Back (⌘/Ctrl+←)">←</button>
+        <button id="nav-forward-button" class="icon-button" type="button" aria-label="Forward" title="Forward (⌘/Ctrl+→)" disabled>→</button>
+        <button id="nav-refresh-button" class="icon-button" type="button" aria-label="Refresh" title="Refresh (⌘/Ctrl+R)">⟳</button>
         <input
           id="address-input"
           class="address-input"
@@ -24,6 +28,7 @@
     </header>
 
     <main class="content">
+      <ul id="address-suggestions" class="suggestions hidden" role="listbox" aria-label="Address suggestions"></ul>
       <div id="extensions-popover" class="extensions-popover hidden" role="dialog" aria-label="Extensions">
         <div class="extensions-item">
           <span class="ext-icon">⛔</span>

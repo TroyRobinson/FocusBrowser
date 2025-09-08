@@ -28,6 +28,7 @@ body {
   border-bottom: 1px solid var(--input-border);
   background: rgba(10, 12, 16, 0.8);
   backdrop-filter: saturate(120%) blur(6px);
+  position: relative;
 }
 
 .address-form {
@@ -66,6 +67,87 @@ body {
   background: var(--input-bg);
   color: var(--fg);
   cursor: pointer;
+}
+
+.icon-button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Optional prominent style when button performs a destructive/stop action */
+.icon-button.danger {
+  background: #8b1e23;
+  border-color: #b23a3f;
+  color: #fff;
+}
+
+/* Thin loading bar above the address bar */
+.loading-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 0%;
+  background: var(--accent);
+  box-shadow: 0 1px 6px rgba(79, 124, 255, 0.6);
+  transition: width 0.2s ease, opacity 0.2s ease;
+  opacity: 1;
+}
+
+/* Indeterminate shimmer for long loads */
+.loading-bar.indeterminate {
+  background-image: linear-gradient(90deg,
+    rgba(79, 124, 255, 0.25) 25%,
+    var(--accent) 50%,
+    rgba(79, 124, 255, 0.25) 75%
+  );
+  background-size: 200% 100%;
+  animation: loading-shimmer 1.2s linear infinite;
+}
+
+@keyframes loading-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: 0 0; }
+}
+
+/* Near completion color */
+.loading-bar.near-done {
+  background: #22c55e;
+  box-shadow: 0 1px 6px rgba(34, 197, 94, 0.6);
+}
+
+/* Address suggestions dropdown */
+.suggestions {
+  position: absolute;
+  z-index: 10;
+  background: #1a1f28;
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.suggestions li {
+  padding: 8px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.suggestions li.selected {
+  background: rgba(79, 124, 255, 0.25);
+}
+
+.suggestions li .hint {
+  color: var(--muted);
+}
+
+.suggestions li strong.match {
+  font-weight: 600;
+  color: #ffffff;
 }
 
 .extensions-popover {
