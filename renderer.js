@@ -1207,8 +1207,12 @@ function acceptSuggestion(idx, opts = {}) {
   if (!suggItems[idx]) return;
   const it = suggItems[idx];
   if (it.kind === 'active') {
-    debugLog('acceptSuggestion -> active', { id: it.id });
+    debugLog('acceptSuggestion -> active', { id: it.id, shift: !!opts.shiftKey });
     hideSuggestions();
+    // If Shift is held, park the current view before switching to an existing active one
+    if (opts && opts.shiftKey) {
+      try { parkCurrentAsActive(); } catch {}
+    }
     switchToActive(it.id);
     return;
   }
@@ -1278,10 +1282,15 @@ function renderSuggestions() {
       li.appendChild(left);
       li.appendChild(closeBtn);
     } else if (it.typed) {
-      li.textContent = it.label;
+      const left = document.createElement('div');
+      left.className = 'line-left';
+      left.textContent = it.label;
+      li.appendChild(left);
     } else {
-      li.innerHTML = '';
-      li.appendChild(renderHighlightedText(String(it.label), it.matches));
+      const left = document.createElement('div');
+      left.className = 'line-left';
+      left.appendChild(renderHighlightedText(String(it.label), it.matches));
+      li.appendChild(left);
     }
     li.addEventListener('mouseenter', () => { suggSelected = idx; updateSuggestionSelection(); });
     li.addEventListener('mousedown', (e) => { e.preventDefault(); acceptSuggestion(idx, { shiftKey: e.shiftKey }); });
@@ -1448,6 +1457,10 @@ input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     debugLog('keydown Enter', { shift: !!e.shiftKey, suggSelected });
     e.preventDefault();
+    // If Shift is held, park the current view first, regardless of destination type
+    if (e.shiftKey) {
+      try { parkCurrentAsActive(); } catch {}
+    }
     if (suggSelected >= 0) {
       acceptSuggestion(suggSelected, { shiftKey: e.shiftKey });
     } else {
