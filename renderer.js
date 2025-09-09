@@ -92,6 +92,10 @@ const DELAY_KEY = 'whitelist_delay_minutes';
 const DELAY_PENDING_MIN_KEY = 'whitelist_delay_pending_minutes';
 const DELAY_PENDING_AT_KEY = 'whitelist_delay_pending_activate_at';
 
+// Active sessions persistence
+const ACTIVE_SESSIONS_KEY = 'active_sessions_v1';
+const VISIBLE_VIEW_KEY = 'visible_view_v1';
+
 function loadWhitelist() {
   try {
     const raw = localStorage.getItem(WL_KEY);
@@ -576,6 +580,119 @@ function addDomainWithDelay(host) {
 const activeLocations = new Map(); // id -> { id, title, url, webview }
 let activeSeq = 1;
 
+// Persistence helpers for active sessions
+function persistActiveSessions() {
+  try {
+    const arr = [];
+    for (const [id, rec] of activeLocations) {
+      const url = (rec?.webview?.getURL?.() || rec?.url || '').trim();
+      const title = String(rec?.title || '');
+      if (!url) continue;
+      arr.push({ id: String(id), url, title });
+    }
+    localStorage.setItem(ACTIVE_SESSIONS_KEY, JSON.stringify(arr));
+  } catch {}
+}
+
+function loadActiveSessions() {
+  try {
+    const raw = localStorage.getItem(ACTIVE_SESSIONS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .map((it) => {
+        if (!it || typeof it !== 'object') return null;
+        const id = String(it.id ?? '').trim();
+        const url = String(it.url ?? '').trim();
+        const title = String(it.title ?? '');
+        if (!id || !url) return null;
+        return { id, url, title };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function persistVisibleViewFor(el) {
+  try {
+    let data = { kind: 'primary' };
+    // Primary is only when this is the ephemeral primary with id 'webview'
+    if (!(el === primaryWebView && el?.id === 'webview')) {
+      const id = findActiveIdByWebView(el);
+      if (id) data = { kind: 'active', id: String(id) };
+    }
+    localStorage.setItem(VISIBLE_VIEW_KEY, JSON.stringify(data));
+  } catch {}
+}
+
+function loadVisibleView() {
+  try {
+    const raw = localStorage.getItem(VISIBLE_VIEW_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return null;
+    const kind = obj.kind === 'active' ? 'active' : obj.kind === 'primary' ? 'primary' : null;
+    if (!kind) return null;
+    if (kind === 'active') {
+      const id = String(obj.id ?? '').trim();
+      if (!id) return null;
+      return { kind, id };
+    }
+    return { kind: 'primary' };
+  } catch {
+    return null;
+  }
+}
+
+function findActiveIdByWebView(el) {
+  try {
+    for (const [id, rec] of activeLocations) {
+      if (rec?.webview === el) return String(id);
+    }
+  } catch {}
+  return null;
+}
+
+function restoreActiveSessionsFromStorage() {
+  try {
+    const list = loadActiveSessions();
+    if (!Array.isArray(list) || list.length === 0) {
+      // Still initialize visible view key to current primary
+      persistVisibleViewFor(getVisibleWebView());
+      return;
+    }
+    let maxIdNum = 0;
+    const container = getContentContainer();
+    list.forEach(({ id, url, title }) => {
+      const el = document.createElement('webview');
+      el.id = `webview-active-${id}`;
+      el.setAttribute('disableblinkfeatures', 'AutomationControlled');
+      applyWebViewFrameStyles(el);
+      setLastAllowed(el, 'about:blank');
+      container?.appendChild(el);
+      // Wire before setting src so events are tracked
+      wireWebView(el);
+      try { el.setAttribute('src', url); } catch { el.src = url; }
+      el.classList.add('hidden');
+      activeLocations.set(String(id), { id: String(id), title: String(title || ''), url: String(url || ''), webview: el });
+      const n = Number(id);
+      if (Number.isFinite(n)) maxIdNum = Math.max(maxIdNum, n);
+    });
+    activeSeq = Math.max(activeSeq, maxIdNum + 1);
+
+    // Restore last visible
+    const vv = loadVisibleView();
+    if (vv && vv.kind === 'active' && activeLocations.has(String(vv.id))) {
+      switchToActive(String(vv.id));
+    } else if (vv && vv.kind === 'primary') {
+      const primary = ensurePrimaryWebView();
+      switchToWebView(primary);
+    }
+  } catch {}
+}
+
 function getContentContainer() {
   return document.querySelector('.content');
 }
@@ -604,6 +721,16 @@ function wireWebView(el) {
     if (e.url && isUrlAllowed(e.url)) {
       setLastAllowed(el, e.url);
     }
+    // If this el belongs to an active session, update its record and persist
+    try {
+      const aid = findActiveIdByWebView(el);
+      if (aid && activeLocations.has(aid)) {
+        const rec = activeLocations.get(aid);
+        rec.url = e.url || rec.url;
+        try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
+        persistActiveSessions();
+      }
+    } catch {}
     updateNavButtons();
     updateRefreshButtonUI();
     finishLoadingBar();
@@ -616,6 +743,16 @@ function wireWebView(el) {
     if (e.url && isUrlAllowed(e.url)) {
       setLastAllowed(el, e.url);
     }
+    // Update persisted active session if applicable
+    try {
+      const aid = findActiveIdByWebView(el);
+      if (aid && activeLocations.has(aid)) {
+        const rec = activeLocations.get(aid);
+        rec.url = e.url || rec.url;
+        try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
+        persistActiveSessions();
+      }
+    } catch {}
     updateNavButtons();
     updateRefreshButtonUI();
     finishLoadingBar();
@@ -656,6 +793,16 @@ function wireWebView(el) {
       if (current && current !== 'about:blank' && !isUrlAllowed(current)) {
         showBlockedWithAdd(current);
       }
+      // Update title/url for active sessions on ready
+      try {
+        const aid = findActiveIdByWebView(el);
+        if (aid && activeLocations.has(aid)) {
+          const rec = activeLocations.get(aid);
+          rec.url = current || rec.url;
+          try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
+          persistActiveSessions();
+        }
+      } catch {}
     } catch {}
     updateNavButtons();
     updateRefreshButtonUI();
@@ -740,6 +887,8 @@ function switchToWebView(el) {
     const url = el.getURL?.() || '';
     if (url) input.value = url;
   } catch {}
+  // Persist which view is visible
+  try { persistVisibleViewFor(el); } catch {}
 }
 
 function parkCurrentAsActive() {
@@ -762,8 +911,14 @@ function parkCurrentAsActive() {
   debugLog('parkCurrentAsActive: created', { id, viewId: viewId(el), url: currentURL });
   // Try to update title asynchronously
   setTimeout(() => {
-    try { activeLocations.get(id).title = el.getTitle?.() || ''; } catch {}
+    try {
+      const rec = activeLocations.get(id);
+      if (rec) rec.title = el.getTitle?.() || '';
+      persistActiveSessions();
+    } catch {}
   }, 0);
+  // Persist after creation
+  try { persistActiveSessions(); } catch {}
   return id;
 }
 
@@ -1117,6 +1272,8 @@ function updateRefreshButtonUI() {
 
 // --- Events wiring ---
 wireWebView(primaryWebView);
+// Restore any previously persisted active sessions and last visible view
+try { restoreActiveSessionsFromStorage(); } catch {}
 
 navBackBtn?.addEventListener('click', (e) => {
   e.preventDefault();
