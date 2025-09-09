@@ -35,7 +35,7 @@ let primaryWebView = document.getElementById('webview');
 let currentVisibleView = primaryWebView; // track which webview is currently shown
 
 // --- Debug logging ---
-const DEBUG = false;
+const DEBUG = true;
 function viewId(el) { try { return el?.id || '(no-id)'; } catch { return '(err)'; } }
 function viewURL(el) { try { return el?.getURL?.() || ''; } catch { return ''; } }
 function debugLog(...args) {
@@ -809,6 +809,18 @@ function wireWebView(el) {
     finishLoadingBar();
   });
 
+  // Track page title changes so suggestions stay fresh
+  el.addEventListener('page-title-updated', () => {
+    try {
+      const aid = findActiveIdByWebView(el);
+      if (aid && activeLocations.has(aid)) {
+        const rec = activeLocations.get(aid);
+        try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
+        persistActiveSessions();
+      }
+    } catch {}
+  });
+
   el.addEventListener('did-start-navigation', (e) => {
     try {
       const { url, isMainFrame } = e;
@@ -933,16 +945,20 @@ function getActiveSuggestions(q) {
   const items = [];
   const query = String(q || '').trim();
   for (const [, rec] of activeLocations) {
-    // Build a display label using title or hostname
-    const url = rec.webview?.getURL?.() || rec.url || '';
-    let label = rec.title || '';
-    if (!label) {
-      try { label = new URL(url).hostname; } catch { label = url; }
+    // Always show the CURRENT URL as the label
+    const currentURL = rec.webview?.getURL?.() || rec.url || '';
+    const label = currentURL;
+    // Fetch CURRENT title from webview to avoid stale titles; fallback to hostname
+    let title = '';
+    try { title = rec.webview?.getTitle?.() || rec.title || ''; } catch { title = rec.title || ''; }
+    if (!title) {
+      try { title = new URL(currentURL).hostname || ''; } catch {}
     }
-    const matchBase = `${label} ${url}`.trim();
+    const detail = title;
+    const matchBase = `${label} ${detail}`.trim();
     const m = fuzzyMatch(query, matchBase);
     if (query && m.score < 0) continue;
-    items.push({ kind: 'active', id: rec.id, label, detail: url, score: query ? m.score : 9999, matches: m.indices });
+    items.push({ kind: 'active', id: rec.id, label, detail, score: query ? m.score : 9999, matches: m.indices });
   }
   items.sort((a, b) => b.score - a.score);
   return items;
@@ -1413,6 +1429,7 @@ document.addEventListener('click', (e) => {
 refreshUboToggle();
 updateNavButtons();
 updateRefreshButtonUI();
+
 
 // Keyboard shortcuts from main process
 try {
