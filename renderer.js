@@ -526,6 +526,11 @@ input?.addEventListener('focus', () => {
   if (String(input.value || '').trim()) renderSuggestions();
 });
 
+// Hide suggestions when the address bar loses focus (e.g., clicking into the webview)
+input?.addEventListener('blur', () => {
+  hideSuggestions();
+});
+
 input?.addEventListener('keydown', (e) => {
   if (!suggestionsEl || suggestionsEl.classList.contains('hidden')) return;
   if (e.key === 'ArrowDown') {
@@ -568,6 +573,11 @@ document.addEventListener('click', (e) => {
   if (suggestionsEl.contains(target) || input.contains(target)) return;
   hideSuggestions();
 });
+
+// Extra guard: hide suggestions when interacting with the webview
+webview?.addEventListener('focus', () => { hideSuggestions(); });
+// Some platforms may not deliver click, so also listen for pointerdown
+webview?.addEventListener('pointerdown', () => { hideSuggestions(); });
 
 function addDomainWithDelay(host) {
   const wl = loadWhitelist();
