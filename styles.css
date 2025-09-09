@@ -129,11 +129,23 @@ body {
   list-style: none;
   max-height: 260px;
   overflow-y: auto;
+  /* Prevent horizontal scroll; long items will be truncated */
+  overflow-x: hidden;
 }
 
 .suggestions li {
   padding: 8px 12px;
   cursor: pointer;
+  white-space: nowrap;
+  /* Truncate overly long items with ellipsis */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Ensure compound rows (active entries with label + hint) also truncate */
+.suggestions li > div {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

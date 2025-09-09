@@ -982,7 +982,8 @@ function acceptSuggestion(idx, opts = {}) {
 
 function renderSuggestions() {
   if (!suggestionsEl || !input) return;
-  const q = String(input.value || '').trim();
+  const raw = String(input.value || '');
+  const q = raw.trim();
   if (!q) { hideSuggestions(); return; }
   const list = loadWhitelist();
   const candidates = Array.from(new Set(list.map((it) => it?.domain).filter(Boolean)));
@@ -992,9 +993,15 @@ function renderSuggestions() {
     .sort((a, b) => b.m.score - a.m.score)
     .slice(0, 8);
   const active = getActiveSuggestions(q).slice(0, 6);
+
+  // Only show the custom submit (typed) option when the user has either:
+  // - pressed space after a term (trailing space), e.g. "word "
+  // - added a period after a term (trailing period), e.g. "word."
+  const showTyped = raw.endsWith(' ') || raw.endsWith('.');
+
   const items = [
     ...active,
-    { kind: 'typed', value: q, label: q, typed: true },
+    ...(showTyped ? [{ kind: 'typed', value: q, label: q, typed: true }] : []),
     ...scored.map((it) => ({ kind: 'domain', value: it.c, label: it.c, matches: it.m.indices }))
   ];
   suggItems = items;
