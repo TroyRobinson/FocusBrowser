@@ -1482,6 +1482,18 @@ input.addEventListener('keydown', (e) => {
       e.preventDefault();
       acceptSuggestion(suggSelected, { shiftKey: e.shiftKey });
     }
+  } else if (e.key === 'Backspace' && (e.metaKey || e.ctrlKey)) {
+    // Cmd/Ctrl+Backspace: delete selected active location from suggestions
+    if (!suggestionsEl || suggestionsEl.classList.contains('hidden')) return;
+    if (suggSelected >= 0) {
+      const it = suggItems[suggSelected];
+      if (it && it.kind === 'active') {
+        e.preventDefault();
+        try { closeActiveById(it.id); } catch {}
+        // Re-render suggestions to reflect removal
+        renderSuggestions();
+      }
+    }
   } else if (e.key === 'Escape') {
     hideSuggestions();
   }
