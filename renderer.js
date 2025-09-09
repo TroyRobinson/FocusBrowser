@@ -954,15 +954,16 @@ function switchToActive(id) {
   switchToWebView(rec.webview);
 }
 
-function closeCurrentActive() {
+function closeActiveById(id) {
   try {
-    const el = getVisibleWebView();
-    const aid = findActiveIdByWebView(el);
-    debugLog('closeCurrentActive()', { aid, viewId: viewId(el), url: viewURL(el) });
-    if (!aid) { debugLog('closeCurrentActive: no active view to close'); return; }
+    const rec = activeLocations.get(String(id));
+    if (!rec) { debugLog('closeActiveById: not found', { id }); return; }
+    const el = rec.webview;
+    const isCurrent = el === getVisibleWebView();
+    debugLog('closeActiveById()', { id, isCurrent, viewId: viewId(el), url: viewURL(el) });
     // Remove from data structures first
-    activeLocations.delete(aid);
-    activeMru = activeMru.filter((x) => x !== aid && activeLocations.has(x));
+    activeLocations.delete(String(id));
+    activeMru = activeMru.filter((x) => x !== String(id) && activeLocations.has(x));
     // Remove DOM element
     try { el.remove(); } catch {}
     if (el === primaryWebView) {
@@ -970,24 +971,38 @@ function closeCurrentActive() {
       primaryWebView = null;
     }
     persistActiveSessions();
-    // Determine next view
-    let nextId = activeMru.length > 0 ? activeMru[0] : null;
-    if (nextId && activeLocations.has(nextId)) {
-      switchToActive(nextId);
-    } else {
-      // Fallback: pick any remaining active session
-      let anyId = null;
-      for (const [id] of activeLocations) { anyId = id; break; }
-      if (anyId) {
-        switchToActive(anyId);
+    if (isCurrent) {
+      // Determine next view
+      let nextId = activeMru.length > 0 ? activeMru[0] : null;
+      if (nextId && activeLocations.has(nextId)) {
+        switchToActive(nextId);
       } else {
-        // No active locations remain: show about:blank in primary
-        const primary = ensurePrimaryWebView();
-        try { primary.setAttribute('src', 'about:blank'); } catch { primary.src = 'about:blank'; }
-        switchToWebView(primary);
+        // Fallback: pick any remaining active session
+        let anyId = null;
+        for (const [rid] of activeLocations) { anyId = rid; break; }
+        if (anyId) {
+          switchToActive(anyId);
+        } else {
+          // No active locations remain: show about:blank in primary
+          const primary = ensurePrimaryWebView();
+          try { primary.setAttribute('src', 'about:blank'); } catch { primary.src = 'about:blank'; }
+          switchToWebView(primary);
+        }
       }
+      updateCloseButtonUI();
     }
-    updateCloseButtonUI();
+  } catch (err) {
+    debugLog('closeActiveById: error', String(err && err.message || err));
+  }
+}
+
+function closeCurrentActive() {
+  try {
+    const el = getVisibleWebView();
+    const aid = findActiveIdByWebView(el);
+    debugLog('closeCurrentActive()', { aid, viewId: viewId(el), url: viewURL(el) });
+    if (!aid) { debugLog('closeCurrentActive: no active view to close'); return; }
+    closeActiveById(aid);
   } catch (err) {
     debugLog('closeCurrentActive: error', String(err && err.message || err));
   }
@@ -1207,26 +1222,34 @@ function renderSuggestions() {
   if (!suggestionsEl || !input) return;
   const raw = String(input.value || '');
   const q = raw.trim();
-  if (!q) { hideSuggestions(); return; }
+  const inputFocused = document.activeElement === input;
   const list = loadWhitelist();
   const candidates = Array.from(new Set(list.map((it) => it?.domain).filter(Boolean)));
-  const scored = candidates
-    .map((c) => ({ c, m: fuzzyMatch(q, c) }))
-    .filter((it) => it.m.score >= 0)
-    .sort((a, b) => b.m.score - a.m.score)
-    .slice(0, 8);
-  const active = getActiveSuggestions(q).slice(0, 6);
 
-  // Only show the custom submit (typed) option when the user has either:
-  // - pressed space after a term (trailing space), e.g. "word "
-  // - added a period after a term (trailing period), e.g. "word."
-  const showTyped = raw.endsWith(' ') || raw.endsWith('.');
+  let items = [];
+  if (!q) {
+    if (!inputFocused) { hideSuggestions(); return; }
+    // Show active sessions when empty input is focused
+    items = getActiveSuggestions('').map((it) => ({ ...it }));
+  } else {
+    const scored = candidates
+      .map((c) => ({ c, m: fuzzyMatch(q, c) }))
+      .filter((it) => it.m.score >= 0)
+      .sort((a, b) => b.m.score - a.m.score)
+      .slice(0, 8);
+    const active = getActiveSuggestions(q).slice(0, 6);
 
-  const items = [
-    ...active,
-    ...(showTyped ? [{ kind: 'typed', value: q, label: q, typed: true }] : []),
-    ...scored.map((it) => ({ kind: 'domain', value: it.c, label: it.c, matches: it.m.indices }))
-  ];
+    // Only show the custom submit (typed) option when the user has either:
+    // - pressed space after a term (trailing space), e.g. "word "
+    // - added a period after a term (trailing period), e.g. "word."
+    const showTyped = raw.endsWith(' ') || raw.endsWith('.');
+
+    items = [
+      ...active,
+      ...(showTyped ? [{ kind: 'typed', value: q, label: q, typed: true }] : []),
+      ...scored.map((it) => ({ kind: 'domain', value: it.c, label: it.c, matches: it.m.indices }))
+    ];
+  }
   suggItems = items;
   suggSelected = items.length > 0 ? 0 : -1;
   suggestionsEl.innerHTML = '';
@@ -1235,14 +1258,25 @@ function renderSuggestions() {
     li.setAttribute('role', 'option');
     if (idx === suggSelected) li.classList.add('selected');
     if (it.kind === 'active') {
-      const line = document.createElement('div');
+      const left = document.createElement('div');
+      left.className = 'line-left';
       const strongFrag = renderHighlightedText(String(it.label), it.matches);
       const hint = document.createElement('span');
       hint.className = 'hint';
       hint.textContent = `  — Active  ${it.detail ? `(${it.detail})` : ''}`;
-      line.appendChild(strongFrag);
-      line.appendChild(hint);
-      li.appendChild(line);
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'mini-close';
+      closeBtn.title = 'Close';
+      closeBtn.textContent = '×';
+      closeBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        try { closeActiveById(it.id); } finally { renderSuggestions(); }
+      });
+      left.appendChild(strongFrag);
+      left.appendChild(hint);
+      li.appendChild(left);
+      li.appendChild(closeBtn);
     } else if (it.typed) {
       li.textContent = it.label;
     } else {
@@ -1253,6 +1287,7 @@ function renderSuggestions() {
     li.addEventListener('mousedown', (e) => { e.preventDefault(); acceptSuggestion(idx, { shiftKey: e.shiftKey }); });
     suggestionsEl.appendChild(li);
   });
+  if (items.length === 0) { hideSuggestions(); return; }
   updateSuggestionsPosition();
   suggestionsEl.classList.remove('hidden');
 }
@@ -1343,10 +1378,18 @@ function updateCloseButtonUI() {
     const view = getVisibleWebView();
     const aid = findActiveIdByWebView(view);
     if (closeActiveBtn) {
+      // Always show; toggle label and a11y based on active state
+      closeActiveBtn.classList.remove('hidden');
       if (aid) {
-        closeActiveBtn.classList.remove('hidden');
+        closeActiveBtn.textContent = '✕';
+        closeActiveBtn.classList.remove('danger');
+        closeActiveBtn.setAttribute('aria-label', 'Close active session');
+        closeActiveBtn.setAttribute('title', 'Close active session');
       } else {
-        closeActiveBtn.classList.add('hidden');
+        closeActiveBtn.textContent = '+';
+        closeActiveBtn.classList.remove('danger');
+        closeActiveBtn.setAttribute('aria-label', 'Add as active session');
+        closeActiveBtn.setAttribute('title', 'Add as active session');
       }
     }
   } catch {}
@@ -1383,12 +1426,23 @@ navRefreshBtn?.addEventListener('click', (e) => {
 
 closeActiveBtn?.addEventListener('click', (e) => {
   e.preventDefault();
-  debugLog('closeActiveBtn click');
-  closeCurrentActive();
+  try {
+    const v = getVisibleWebView();
+    const aid = findActiveIdByWebView(v);
+    debugLog('closeActiveBtn click', { id: viewId(v), url: viewURL(v), aid });
+    if (aid) {
+      closeCurrentActive();
+    } else {
+      const parked = parkCurrentAsActive();
+      debugLog('park via plus button', { parked });
+      updateCloseButtonUI();
+    }
+  } catch {}
 });
 
 // Input interactions
 input.addEventListener('input', () => { renderSuggestions(); });
+input.addEventListener('focus', () => { renderSuggestions(); });
 
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {

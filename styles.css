@@ -136,17 +136,36 @@ body {
 .suggestions li {
   padding: 8px 12px;
   cursor: pointer;
-  white-space: nowrap;
-  /* Truncate overly long items with ellipsis */
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-/* Ensure compound rows (active entries with label + hint) also truncate */
+/* Left side of a suggestion item: text area with ellipsis */
+.suggestions li .line-left {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0; /* allow flexbox text truncation */
+}
+
+/* Keep previous generic rule for any nested divs, but allow flexchildren */
 .suggestions li > div {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Tiny close button on the right */
+.suggestions li .mini-close {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--fg);
 }
 
 .suggestions li.selected {
