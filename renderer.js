@@ -17,7 +17,6 @@ function normalizeToURL(input) {
 
 const form = document.getElementById('address-form');
 const input = document.getElementById('address-input');
-const goBtn = document.getElementById('go-button');
 const settingsBtn = document.getElementById('settings-button');
 const backBtn = document.getElementById('back-button');
 const navBackBtn = document.getElementById('nav-back-button');
@@ -25,6 +24,7 @@ const navForwardBtn = document.getElementById('nav-forward-button');
 const navRefreshBtn = document.getElementById('nav-refresh-button');
 const loadingBar = document.getElementById('loading-bar');
 const suggestionsEl = document.getElementById('address-suggestions');
+const closeActiveBtn = document.getElementById('close-active-button');
 let isLoading = false;
 let loadingInterval = null;
 let loadingProgress = 0; // 0..100
@@ -579,6 +579,8 @@ function addDomainWithDelay(host) {
 // --- Active Locations ---
 const activeLocations = new Map(); // id -> { id, title, url, webview }
 let activeSeq = 1;
+// MRU list of active ids (most recent first)
+let activeMru = [];
 
 // Persistence helpers for active sessions
 function persistActiveSessions() {
@@ -733,6 +735,7 @@ function wireWebView(el) {
     } catch {}
     updateNavButtons();
     updateRefreshButtonUI();
+    updateCloseButtonUI();
     finishLoadingBar();
   });
   el.addEventListener('did-navigate-in-page', (e) => {
@@ -755,6 +758,7 @@ function wireWebView(el) {
     } catch {}
     updateNavButtons();
     updateRefreshButtonUI();
+    updateCloseButtonUI();
     finishLoadingBar();
   });
 
@@ -806,6 +810,7 @@ function wireWebView(el) {
     } catch {}
     updateNavButtons();
     updateRefreshButtonUI();
+    updateCloseButtonUI();
     finishLoadingBar();
   });
 
@@ -893,8 +898,16 @@ function switchToWebView(el) {
   // Show target
   el.classList.remove('hidden');
   currentVisibleView = el;
+  // Update MRU if this is an active webview
+  try {
+    const aid = findActiveIdByWebView(el);
+    if (aid) {
+      activeMru = [aid, ...activeMru.filter((x) => x !== aid && activeLocations.has(x))];
+    }
+  } catch {}
   updateNavButtons();
   updateRefreshButtonUI();
+  updateCloseButtonUI();
   try {
     const url = el.getURL?.() || '';
     if (url) input.value = url;
@@ -939,6 +952,45 @@ function switchToActive(id) {
   if (!rec) { debugLog('switchToActive: not found', { id }); return; }
   debugLog('switchToActive', { id, viewId: viewId(rec.webview), url: viewURL(rec.webview) });
   switchToWebView(rec.webview);
+}
+
+function closeCurrentActive() {
+  try {
+    const el = getVisibleWebView();
+    const aid = findActiveIdByWebView(el);
+    debugLog('closeCurrentActive()', { aid, viewId: viewId(el), url: viewURL(el) });
+    if (!aid) { debugLog('closeCurrentActive: no active view to close'); return; }
+    // Remove from data structures first
+    activeLocations.delete(aid);
+    activeMru = activeMru.filter((x) => x !== aid && activeLocations.has(x));
+    // Remove DOM element
+    try { el.remove(); } catch {}
+    if (el === primaryWebView) {
+      // If we removed the element previously serving as primary, clear ref so a new one is created on demand
+      primaryWebView = null;
+    }
+    persistActiveSessions();
+    // Determine next view
+    let nextId = activeMru.length > 0 ? activeMru[0] : null;
+    if (nextId && activeLocations.has(nextId)) {
+      switchToActive(nextId);
+    } else {
+      // Fallback: pick any remaining active session
+      let anyId = null;
+      for (const [id] of activeLocations) { anyId = id; break; }
+      if (anyId) {
+        switchToActive(anyId);
+      } else {
+        // No active locations remain: show about:blank in primary
+        const primary = ensurePrimaryWebView();
+        try { primary.setAttribute('src', 'about:blank'); } catch { primary.src = 'about:blank'; }
+        switchToWebView(primary);
+      }
+    }
+    updateCloseButtonUI();
+  } catch (err) {
+    debugLog('closeCurrentActive: error', String(err && err.message || err));
+  }
 }
 
 function getActiveSuggestions(q) {
@@ -1286,6 +1338,20 @@ function updateRefreshButtonUI() {
   } catch {}
 }
 
+function updateCloseButtonUI() {
+  try {
+    const view = getVisibleWebView();
+    const aid = findActiveIdByWebView(view);
+    if (closeActiveBtn) {
+      if (aid) {
+        closeActiveBtn.classList.remove('hidden');
+      } else {
+        closeActiveBtn.classList.add('hidden');
+      }
+    }
+  } catch {}
+}
+
 // --- Events wiring ---
 wireWebView(primaryWebView);
 // Restore any previously persisted active sessions and last visible view
@@ -1313,6 +1379,12 @@ navRefreshBtn?.addEventListener('click', (e) => {
       v?.reload?.();
     }
   } catch {}
+});
+
+closeActiveBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  debugLog('closeActiveBtn click');
+  closeCurrentActive();
 });
 
 // Input interactions
@@ -1372,11 +1444,6 @@ form.addEventListener('submit', (e) => {
   e.preventDefault();
 });
 
-goBtn.addEventListener('click', (e) => {
-  e.preventDefault();
-  debugLog('Go click', { shift: !!e.shiftKey });
-  navigate({ shiftKey: !!e.shiftKey });
-});
 
 // --- Extensions (uBlock) UI ---
 function hideExtensionsPopover() {
@@ -1429,6 +1496,7 @@ document.addEventListener('click', (e) => {
 refreshUboToggle();
 updateNavButtons();
 updateRefreshButtonUI();
+updateCloseButtonUI();
 
 
 // Keyboard shortcuts from main process
