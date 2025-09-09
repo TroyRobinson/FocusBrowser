@@ -22,7 +22,12 @@
           aria-label="Address bar"
         />
         <button id="close-active-button" class="icon-button hidden" type="button" aria-label="Close active session" title="Close active session">✕</button>
-        <button id="extensions-button" class="icon-button" type="button" aria-label="Extensions">🧩</button>
+        <button id="extensions-button" class="icon-button" type="button" aria-label="Extensions">
+          <svg class="icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="4" y="4.5" width="12" height="16" rx="2" ry="2" fill="currentColor"></rect>
+            <circle cx="18" cy="12" r="3" fill="currentColor"></circle>
+          </svg>
+        </button>
         <button id="settings-button" class="icon-button" type="button" aria-label="Settings">⚙︎</button>
        </form>
     </header>
@@ -65,9 +70,17 @@
             Matching includes subdomains and sub-URLs by default.
           </p>
           <form id="add-domain-form" class="add-domain" autocomplete="off">
-            <input id="domain-input" class="address-input" type="text" placeholder="example.com" aria-label="Add domain" />
+            <textarea id="domain-input" class="address-input" placeholder="example.com or paste multiple (space, comma, or line separated)" aria-label="Add domains" rows="3" wrap="soft"></textarea>
             <button id="add-domain-button" class="go-button" type="submit">Add</button>
           </form>
+          <div class="sort-row">
+            <button id="sort-toggle" class="sort-toggle-btn" type="button" aria-pressed="true" title="Toggle sort mode">
+              <svg class="sort-icon" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M8 4l-3 3h2v10H5l3 3 3-3H9V7h2L8 4zm8 0l-3 3h2v10h-2l3 3 3-3h-2V7h2l-3-3z" fill="currentColor"/>
+              </svg>
+              <span class="sort-text">recent</span>
+            </button>
+          </div>
           <ul id="domain-list" class="domain-list" aria-label="Whitelisted domains"></ul>
         </div>
       </section>

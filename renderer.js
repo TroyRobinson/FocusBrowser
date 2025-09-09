@@ -91,10 +91,11 @@ const WL_KEY = 'whitelist';
 const DELAY_KEY = 'whitelist_delay_minutes';
 const DELAY_PENDING_MIN_KEY = 'whitelist_delay_pending_minutes';
 const DELAY_PENDING_AT_KEY = 'whitelist_delay_pending_activate_at';
+const SORT_MODE_KEY = 'wl_sort_mode_v1'; // 'recent' | 'abc'
 
 // Active sessions persistence
 const ACTIVE_SESSIONS_KEY = 'active_sessions_v1';
-const VISIBLE_VIEW_KEY = 'visible_view_v1';
+ const VISIBLE_VIEW_KEY = 'visible_view_v1';
 
 function loadWhitelist() {
   try {
@@ -331,17 +332,42 @@ function setSettingsVisible(visible) {
   if (visible) {
     settingsView.classList.remove('hidden');
     allViews.forEach((wv) => wv.classList.add('hidden'));
+    try { settingsBtn?.classList.add('active'); } catch {}
+    // Show "Settings" in the address bar while settings are open
+    try { if (input) input.value = 'Settings'; } catch {}
+    // Disable nav arrows while in settings
+    try { updateNavButtons(); } catch {}
   } else {
     settingsView.classList.add('hidden');
     // restore only current visible view
     getVisibleWebView()?.classList.remove('hidden');
+    try { settingsBtn?.classList.remove('active'); } catch {}
+    // Restore address bar to current view URL
+    try { const v = getVisibleWebView(); const url = v?.getURL?.() || ''; if (url) input.value = url; } catch {}
+    try { updateNavButtons(); } catch {}
   }
+}
+
+function leaveSettingsIfOpen() {
+  // Close settings and restore content area if currently visible
+  if (!settingsView || settingsView.classList.contains('hidden')) return;
+  setSettingsVisible(false);
+  stopCountdown();
+  clearWhitelistSelection();
+}
+
+function closeSettingsOnLoad(el) {
+  if (!el) return;
+  const done = () => { try { leaveSettingsIfOpen(); } catch {} };
+  el.addEventListener('did-stop-loading', done, { once: true });
+  el.addEventListener('did-fail-load', done, { once: true });
 }
 
 // Settings UI wiring
 const addDomainForm = document.getElementById('add-domain-form');
 const domainInput = document.getElementById('domain-input');
 const domainList = document.getElementById('domain-list');
+const sortToggle = document.getElementById('sort-toggle');
 
 function fmtRemaining(ms) {
   if (ms <= 0) return '';
@@ -371,20 +397,102 @@ function stopCountdown() {
   }
 }
 
+// Whitelist selection state
+let wlSelectedDomains = new Set();
+let wlAnchorIndex = null;
+let wlViewDomains = [];
+
+function clearWhitelistSelection() {
+  wlSelectedDomains = new Set();
+  wlAnchorIndex = null;
+}
+
+function isFocusableInput(el) {
+  if (!el) return false;
+  const tag = String(el.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || el.isContentEditable;
+}
+
+function autosizeDomainInput() {
+  if (!domainInput) return;
+  try {
+    const cs = window.getComputedStyle(domainInput);
+    const lh = parseFloat(cs.lineHeight) || 20;
+    const padTop = parseFloat(cs.paddingTop || '0');
+    const padBot = parseFloat(cs.paddingBottom || '0');
+    const borderTop = parseFloat(cs.borderTopWidth || '0');
+    const borderBot = parseFloat(cs.borderBottomWidth || '0');
+    const maxPx = Math.round(lh * 10 + padTop + padBot + borderTop + borderBot);
+
+    // Collapse before measuring to avoid phantom extra line space
+    domainInput.style.height = '0px';
+    const sh = domainInput.scrollHeight; // includes padding
+    const needed = sh + borderTop + borderBot;
+    const next = Math.min(needed, maxPx);
+
+    domainInput.style.height = `${next}px`;
+    domainInput.style.overflowY = needed > maxPx ? 'auto' : 'hidden';
+  } catch {}
+}
+
 function renderWhitelist() {
   if (!domainList) return;
   const list = loadWhitelist();
+  const raw = String(domainInput?.value || '');
+  const parts = raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  const q = (parts[parts.length - 1] || '').toLowerCase();
+
+  // Recency: higher index in list means more recently added (we persist in insertion order)
+  const recencyIndex = new Map(list.map((it, i) => [it.domain, i]));
+  const sortMode = (localStorage.getItem(SORT_MODE_KEY) || 'recent') === 'abc' ? 'abc' : 'recent';
+
+  // Build entries with optional fuzzy scoring
+  let entries = [];
+  if (!q) {
+    entries = list
+      .map((it) => ({ item: it, matches: [], score: 0, order: recencyIndex.get(it.domain) || 0 }))
+      .sort((a, b) => sortMode === 'abc'
+        ? String(a.item.domain).localeCompare(String(b.item.domain))
+        : (b.order - a.order));
+  } else {
+    entries = list
+      .map((it) => {
+        const m = fuzzyMatch(q, it.domain);
+        if (m.score < 0) return null;
+        return { item: it, matches: m.indices, score: m.score, order: recencyIndex.get(it.domain) || 0 };
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        const byScore = b.score - a.score;
+        if (byScore !== 0) return byScore;
+        return sortMode === 'abc'
+          ? String(a.item.domain).localeCompare(String(b.item.domain))
+          : (b.order - a.order);
+      });
+  }
+
   domainList.innerHTML = '';
-  if (list.length === 0) {
+  if (entries.length === 0) {
     const li = document.createElement('li');
-    li.textContent = 'No domains added yet.';
+    if (list.length === 0 && !q) {
+      li.textContent = 'No domains added yet.';
+    } else {
+      li.textContent = 'No matching domains.';
+    }
     domainList.appendChild(li);
   } else {
-    list.forEach((item) => {
+    // Track current view order for shift-range selection
+    wlViewDomains = entries.map((e) => e.item.domain);
+    entries.forEach(({ item, matches }, idx) => {
       const li = document.createElement('li');
+      li.tabIndex = 0;
+      li.dataset.domain = item.domain;
+      li.dataset.index = String(idx);
+
       const left = document.createElement('span');
       left.className = 'domain';
-      left.textContent = item.domain;
+      // Highlight fuzzy matches similar to address suggestions
+      left.appendChild(renderHighlightedText(String(item.domain), matches));
 
       const right = document.createElement('span');
       right.className = 'right';
@@ -399,12 +507,31 @@ function renderWhitelist() {
       const btn = document.createElement('button');
       btn.className = 'remove';
       btn.textContent = 'Remove';
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
         const next = loadWhitelist().filter((d) => d.domain !== item.domain);
         saveWhitelist(next);
+        wlSelectedDomains.delete(item.domain);
         renderWhitelist();
       });
       right.appendChild(btn);
+
+      if (wlSelectedDomains.has(item.domain)) li.classList.add('selected');
+
+      li.addEventListener('click', (e) => {
+        const shift = !!e.shiftKey;
+        if (shift && wlAnchorIndex != null) {
+          const [a, b] = [wlAnchorIndex, idx].sort((x, y) => x - y);
+          wlSelectedDomains = new Set();
+          for (let i = a; i <= b; i++) wlSelectedDomains.add(wlViewDomains[i]);
+        } else {
+          wlSelectedDomains = new Set([item.domain]);
+          wlAnchorIndex = idx;
+        }
+        // Focus the clicked item so Backspace works even if textarea was focused
+        try { li.focus(); } catch {}
+        renderWhitelist();
+      });
 
       li.appendChild(left);
       li.appendChild(right);
@@ -418,41 +545,162 @@ function renderWhitelist() {
 if (addDomainForm) {
   addDomainForm.addEventListener('submit', (e) => {
     e.preventDefault();
-    const host = extractHostname(domainInput.value);
-    if (!host) {
+    const raw = String(domainInput.value || '');
+    const tokens = raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+    if (tokens.length === 0) {
       showBanner('Enter a valid domain (e.g., example.com)', 'error');
       return;
     }
     const wl = loadWhitelist();
-    if (wl.some((it) => it.domain === host)) {
-      showBanner('Domain already in whitelist');
-    } else {
-      const delayMin = getDelayMinutes();
-      const activateAt = delayMin > 0 ? Date.now() + delayMin * 60 * 1000 : 0;
-      wl.push({ domain: host, activateAt });
-      saveWhitelist(wl);
-      renderWhitelist();
-      if (delayMin > 0) {
-        showBanner(`Added ${host}. Activates in ${delayMin} min`);
-      } else {
-        showBanner(`Added ${host} to whitelist`);
-      }
-      domainInput.value = '';
+    const existing = new Set(wl.map((it) => it.domain));
+    const toAdd = [];
+    const seen = new Set();
+    for (const t of tokens) {
+      const host = extractHostname(t);
+      if (!host) continue;
+      if (existing.has(host) || seen.has(host)) continue;
+      seen.add(host);
+      toAdd.push(host);
     }
+    if (toAdd.length === 0) {
+      showBanner('No new domains to add');
+      return;
+    }
+    const delayMin = getDelayMinutes();
+    const now = Date.now();
+    for (const host of toAdd) {
+      const activateAt = delayMin > 0 ? now + delayMin * 60 * 1000 : 0;
+      wl.push({ domain: host, activateAt });
+    }
+    saveWhitelist(wl);
+    renderWhitelist();
+    if (delayMin > 0) {
+      showBanner(`Added ${toAdd.length} domain(s). Activates in ${delayMin} min`);
+    } else {
+      showBanner(`Added ${toAdd.length} domain(s) to whitelist`);
+    }
+    domainInput.value = '';
+    try { autosizeDomainInput(); } catch {}
+  });
+}
+
+// Filter and auto-size as the user types
+if (domainInput) {
+  domainInput.addEventListener('input', () => {
+    try { autosizeDomainInput(); } catch {}
+    renderWhitelist();
+  });
+  // Normalize paste to preserve lines and convert separators into newlines
+  domainInput.addEventListener('paste', (e) => {
+    try {
+      const dt = e.clipboardData || window.clipboardData;
+      const text = dt?.getData('text');
+      if (!text) return;
+      e.preventDefault();
+      const start = domainInput.selectionStart ?? domainInput.value.length;
+      const end = domainInput.selectionEnd ?? start;
+      const norm = String(text).replace(/\r\n?/g, '\n');
+      const tokens = norm.split(/[\s,]+/).filter(Boolean);
+      const insert = tokens.join('\n');
+      const before = domainInput.value.slice(0, start);
+      const after = domainInput.value.slice(end);
+      domainInput.value = before + insert + after;
+      const pos = before.length + insert.length;
+      domainInput.setSelectionRange?.(pos, pos);
+      autosizeDomainInput();
+      renderWhitelist();
+    } catch {}
   });
 }
 
 settingsBtn?.addEventListener('click', () => {
-  setSettingsVisible(true);
-  renderWhitelist();
-  initDelayControls?.();
-  startCountdown();
+  const isHidden = !settingsView || settingsView.classList.contains('hidden');
+  if (isHidden) {
+    setSettingsVisible(true);
+    // Initialize sort toggle from storage
+    try {
+      if (sortToggle) {
+        const isRecent = (localStorage.getItem(SORT_MODE_KEY) || 'recent') === 'recent';
+        sortToggle.setAttribute('aria-pressed', String(isRecent));
+        const t = sortToggle.querySelector('.sort-text');
+        if (t) t.textContent = isRecent ? 'recent' : 'abc';
+      }
+    } catch {}
+    renderWhitelist();
+    initDelayControls?.();
+    startCountdown();
+    try { autosizeDomainInput(); } catch {}
+  } else {
+    // Same effect as clicking the Settings back button
+    setSettingsVisible(false);
+    stopCountdown();
+    clearWhitelistSelection();
+  }
 });
+
+// Backspace/Delete removes selected whitelist items while settings are visible
+(function setupDeleteShortcut() {
+  function handler(e) {
+    if (!(e.key === 'Backspace' || e.key === 'Delete')) return;
+    // Only when settings view is visible
+    if (!settingsView || settingsView.classList.contains('hidden')) return;
+    const active = document.activeElement;
+    if (isFocusableInput(active)) return;
+    if (wlSelectedDomains.size === 0) return;
+    e.preventDefault();
+    const toDelete = new Set(wlSelectedDomains);
+    const next = loadWhitelist().filter((d) => !toDelete.has(d.domain));
+    saveWhitelist(next);
+    clearWhitelistSelection();
+    renderWhitelist();
+  }
+  document.addEventListener('keydown', handler, true);
+})();
+
+// Cmd/Ctrl+Enter submits the Add Domain form while settings are visible
+(function setupSubmitShortcut() {
+  function handler(e) {
+    if (!(e.key === 'Enter' && (e.metaKey || e.ctrlKey))) return;
+    if (!settingsView || settingsView.classList.contains('hidden')) return;
+    const active = document.activeElement;
+    // Only trigger when focus is within settings (e.g., list or textarea)
+    if (!settingsView.contains(active)) return;
+    // If focused element is another input/textarea and isn't our domainInput, ignore
+    if (active && active !== domainInput && isFocusableInput(active)) return;
+    const hasText = String(domainInput?.value || '').trim().length > 0;
+    if (!hasText) return;
+    e.preventDefault();
+    if (typeof addDomainForm?.requestSubmit === 'function') {
+      addDomainForm.requestSubmit();
+    } else {
+      const evt = new Event('submit', { cancelable: true, bubbles: true });
+      addDomainForm?.dispatchEvent(evt);
+    }
+  }
+  document.addEventListener('keydown', handler, true);
+})();
 
 backBtn?.addEventListener('click', () => {
   setSettingsVisible(false);
   stopCountdown();
+  clearWhitelistSelection();
 });
+
+// Sort toggle change (button toggles between 'recent' and 'abc')
+if (sortToggle) {
+  sortToggle.addEventListener('click', (e) => {
+    try {
+      e.preventDefault();
+      const isRecent = sortToggle.getAttribute('aria-pressed') === 'true';
+      const nextMode = isRecent ? 'abc' : 'recent';
+      localStorage.setItem(SORT_MODE_KEY, nextMode);
+      sortToggle.setAttribute('aria-pressed', String(nextMode === 'recent'));
+      const t = sortToggle.querySelector('.sort-text');
+      if (t) t.textContent = nextMode;
+      renderWhitelist();
+    } catch {}
+  });
+}
 
 // Delay settings controls
 let delayInputDirty = false;
@@ -712,7 +960,7 @@ function wireWebView(el) {
 
   // Hide suggestions when interacting with this webview
   el.addEventListener('focus', () => { hideSuggestions(); });
-  el.addEventListener('pointerdown', () => { hideSuggestions(); });
+  // pointerdown handler removed (handled globally)
 
   // Update address bar when navigation occurs
   el.addEventListener('did-navigate', (e) => {
@@ -1052,6 +1300,8 @@ function navigate(opts = {}) {
     setLastAllowed(primary, target);
     debugLog('set src (shift)', { id: viewId(primary), target });
     try { primary.setAttribute('src', target); } catch { primary.src = target; }
+    // Defer closing settings until load completes
+    closeSettingsOnLoad(primary);
     // Watchdog: check after 1200ms (debug only)
     if (DEBUG) {
       setTimeout(() => {
@@ -1079,6 +1329,8 @@ function navigate(opts = {}) {
         try {
           debugLog('preload complete, switching', { id: viewId(dest), url: viewURL(dest) });
           switchToWebView(dest);
+          // Now that the destination is ready, close settings (if open)
+          leaveSettingsIfOpen();
         } finally {
           isLoading = false; updateRefreshButtonUI(); finishLoadingBar();
         }
@@ -1087,6 +1339,8 @@ function navigate(opts = {}) {
         try {
           debugLog('preload failed; staying on current', { id: viewId(dest), code: e?.errorCode, url: e?.validatedURL });
           // Keep current view; show banner if needed
+          // Loading completed (failed); close settings if they were open
+          leaveSettingsIfOpen();
         } finally {
           isLoading = false; updateRefreshButtonUI(); finishLoadingBar();
         }
@@ -1097,6 +1351,8 @@ function navigate(opts = {}) {
       setLastAllowed(dest, target);
       debugLog('set src (reuse)', { id: viewId(dest), target });
       try { dest.setAttribute('src', target); } catch { dest.src = target; }
+      // Defer closing settings until load completes
+      closeSettingsOnLoad(dest);
       if (DEBUG) {
         setTimeout(() => {
           debugLog('watchdog (reuse): after set src', { id: viewId(dest), url: viewURL(dest), isLoading: !!dest?.isLoading?.() });
@@ -1209,6 +1465,8 @@ function acceptSuggestion(idx, opts = {}) {
   if (it.kind === 'active') {
     debugLog('acceptSuggestion -> active', { id: it.id, shift: !!opts.shiftKey });
     hideSuggestions();
+    // Ensure settings are closed so the selected webview is shown
+    leaveSettingsIfOpen();
     // If Shift is held, park the current view before switching to an existing active one
     if (opts && opts.shiftKey) {
       try { parkCurrentAsActive(); } catch {}
@@ -1352,6 +1610,12 @@ function finishLoadingBar() {
 
 function updateNavButtons() {
   try {
+    // While Settings is visible, disable nav arrows
+    if (settingsView && !settingsView.classList.contains('hidden')) {
+      if (navBackBtn) navBackBtn.disabled = true;
+      if (navForwardBtn) navForwardBtn.disabled = true;
+      return;
+    }
     const view = getVisibleWebView();
     const canBack = !!view?.canGoBack?.();
     const canFwd = !!view?.canGoForward?.();
@@ -1482,8 +1746,8 @@ input.addEventListener('keydown', (e) => {
       e.preventDefault();
       acceptSuggestion(suggSelected, { shiftKey: e.shiftKey });
     }
-  } else if (e.key === 'Backspace' && (e.metaKey || e.ctrlKey)) {
-    // Cmd/Ctrl+Backspace: delete selected active location from suggestions
+  } else if (e.key === 'Backspace' && e.shiftKey) {
+    // shift+Backspace: delete selected active location from suggestions
     if (!suggestionsEl || suggestionsEl.classList.contains('hidden')) return;
     if (suggSelected >= 0) {
       const it = suggItems[suggSelected];
@@ -1500,8 +1764,12 @@ input.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('resize', () => {
-  if (!suggestionsEl || suggestionsEl.classList.contains('hidden')) return;
-  updateSuggestionsPosition();
+  if (suggestionsEl && !suggestionsEl.classList.contains('hidden')) {
+    updateSuggestionsPosition();
+  }
+  if (extensionsPopover && !extensionsPopover.classList.contains('hidden')) {
+    positionExtensionsPopover();
+  }
 });
 
 document.addEventListener('click', (e) => {
@@ -1512,10 +1780,13 @@ document.addEventListener('click', (e) => {
   hideSuggestions();
 });
 
-// Also hide suggestions when any webview is interacted with
+// Hide open UI (suggestions, extensions) when interacting with a webview
 document.addEventListener('pointerdown', (e) => {
   const t = e.target;
-  if (t && t.tagName && String(t.tagName).toLowerCase() === 'webview') hideSuggestions();
+  if (t && t.tagName && String(t.tagName).toLowerCase() === 'webview') {
+    hideSuggestions();
+    hideExtensionsPopover();
+  }
 }, true);
 
 form.addEventListener('submit', (e) => {
@@ -1529,11 +1800,42 @@ function hideExtensionsPopover() {
   if (extensionsPopover) extensionsPopover.classList.add('hidden');
 }
 
+function positionExtensionsPopover() {
+  if (!extensionsPopover || !extensionsBtn) return;
+  const content = document.querySelector('.content');
+  if (!content) return;
+  // Ensure it's visible to measure
+  const wasHidden = extensionsPopover.classList.contains('hidden');
+  if (wasHidden) extensionsPopover.classList.remove('hidden');
+  // Measure
+  const bb = extensionsBtn.getBoundingClientRect();
+  const cb = content.getBoundingClientRect();
+  const pb = extensionsPopover.getBoundingClientRect();
+  const desiredLeft = (bb.left + bb.right) / 2 - pb.width / 2; // center under button
+  const margin = 8;
+  const minLeft = cb.left + margin;
+  const maxLeft = cb.right - margin - pb.width;
+  const clampedLeft = Math.max(minLeft, Math.min(maxLeft, desiredLeft));
+  const top = Math.max(margin, bb.bottom - cb.top + 6);
+  extensionsPopover.style.left = `${clampedLeft - cb.left}px`;
+  extensionsPopover.style.top = `${top}px`;
+  // Optional: if too tall for viewport, nudge up to fit
+  const contentHeight = cb.height;
+  const pb2 = extensionsPopover.getBoundingClientRect();
+  const overflowY = pb2.height + top > contentHeight - margin;
+  if (overflowY) {
+    const newTop = Math.max(margin, contentHeight - margin - pb2.height);
+    extensionsPopover.style.top = `${newTop}px`;
+  }
+  if (wasHidden) extensionsPopover.classList.add('hidden');
+}
+
 function toggleExtensionsPopover() {
   if (!extensionsPopover) return;
   const isHidden = extensionsPopover.classList.contains('hidden');
   if (isHidden) {
     extensionsPopover.classList.remove('hidden');
+    positionExtensionsPopover();
   } else {
     extensionsPopover.classList.add('hidden');
   }

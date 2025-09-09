@@ -47,6 +47,19 @@ body {
   outline: none;
 }
 
+/* Multiline behavior for the settings domains input */
+textarea.address-input {
+  resize: none; /* auto-size via JS */
+  height: auto;
+  min-height: 40px; /* roughly 1-2 lines */
+  line-height: 1.4;
+  overflow-y: hidden; /* toggled to auto when exceeding max */
+  white-space: pre-wrap; /* preserve newlines */
+  overflow-wrap: anywhere; /* wrap long items even without spaces */
+  word-break: break-word; /* fallback */
+  box-sizing: border-box; /* height includes padding/border for snug fit */
+}
+
 .address-input::placeholder {
   color: var(--muted);
 }
@@ -67,6 +80,13 @@ body {
   background: var(--input-bg);
   color: var(--fg);
   cursor: pointer;
+}
+
+/* Active state (used for Settings when open) */
+.icon-button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .icon-button[disabled] {
@@ -183,17 +203,26 @@ body {
 
 .extensions-popover {
   position: absolute;
-  top: 54px;
-  /* aligned with address bar; adjust if layout changes */
-  left: 50%;
-  transform: translateX(calc(min(800px, 90vw) / 2 - 48px));
+  /* Positioned dynamically under the Extensions button via JS */
+  top: 0;
+  left: 0;
   z-index: 3;
   background: #1a1f28;
   border: 1px solid var(--input-border);
   border-radius: 10px;
-  min-width: 260px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   padding: 10px;
+  /* Prevent overflow on narrow windows */
+  max-width: calc(100% - 16px);
+  box-sizing: border-box;
+}
+
+/* Make the extensions button icon white and ensure SVG sizes nicely */
+#extensions-button {
+  color: #ffffff;
+}
+#extensions-button .icon {
+  display: block;
 }
 
 .extensions-item {
@@ -394,6 +423,43 @@ webview#webview {
   margin: 12px 0 8px;
 }
 
+/* Sort row under the input */
+.sort-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+.sort-row .sort-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Minimal outline toggle button */
+.sort-toggle-btn {
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border);
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sort-toggle-btn[aria-pressed="true"] {
+  /* pressed = recent (subtle fill, no border highlight) */
+  background: rgba(79, 124, 255, 0.12);
+}
+.sort-toggle-btn:hover {
+  border-color: var(--accent); /* border highlight only on hover */
+}
+.sort-toggle-btn .sort-icon {
+  color: var(--muted);
+}
+
 .domain-list {
   list-style: none;
   margin: 0;
@@ -401,6 +467,8 @@ webview#webview {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  -webkit-user-select: none; /* prevent blue text selection on shift-click */
+  user-select: none;
 }
 
 .domain-list li {
@@ -411,6 +479,13 @@ webview#webview {
   background: #12151b;
   border: 1px solid var(--input-border);
   border-radius: 8px;
+  cursor: default;
+}
+
+/* Selected state for whitelist entries */
+.domain-list li.selected {
+  background: rgba(79, 124, 255, 0.25);
+  border-color: var(--accent);
 }
 
 .domain-list .domain {
