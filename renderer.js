@@ -35,6 +35,7 @@ const navRefreshBtn = document.getElementById('nav-refresh-button');
 const loadingBar = document.getElementById('loading-bar');
 const suggestionsEl = document.getElementById('address-suggestions');
 const closeActiveBtn = document.getElementById('close-active-button');
+const activeCountBubble = document.getElementById('active-count-bubble');
 let isLoading = false;
 let loadingInterval = null;
 let loadingProgress = 0; // 0..100
@@ -1029,6 +1030,9 @@ async function restoreActiveSessionsFromStorage() {
       if (Number.isFinite(n)) maxIdNum = Math.max(maxIdNum, n);
     });
     activeSeq = Math.max(activeSeq, maxIdNum + 1);
+    
+    // Update bubble count after restoring sessions
+    updateActiveCountBubble();
 
     // Restore last visible
     const vv = await loadVisibleView();
@@ -1280,6 +1284,8 @@ function parkCurrentAsActive() {
   }
   activeLocations.set(id, { id, title: '', url: currentURL, webview: el });
   debugLog('parkCurrentAsActive: created', { id, viewId: viewId(el), url: currentURL });
+  // Update bubble count
+  updateActiveCountBubble();
   // Try to update title asynchronously
   setTimeout(() => {
     try {
@@ -1310,6 +1316,8 @@ function closeActiveById(id) {
     // Remove from data structures first
     activeLocations.delete(String(id));
     activeMru = activeMru.filter((x) => x !== String(id) && activeLocations.has(x));
+    // Update bubble count after deletion
+    updateActiveCountBubble();
     // Remove DOM element
     try { el.remove(); } catch {}
     if (el === primaryWebView) {
@@ -1357,7 +1365,12 @@ function closeCurrentActive() {
 function getActiveSuggestions(q) {
   const items = [];
   const query = String(q || '').trim();
+  const currentActiveId = findActiveIdByWebView(currentVisibleView);
+  
   for (const [, rec] of activeLocations) {
+    // Skip the currently active/visible location
+    if (rec.id === currentActiveId) continue;
+    
     // Always show the CURRENT URL as the label
     const currentURL = rec.webview?.getURL?.() || rec.url || '';
     const label = currentURL;
@@ -1578,7 +1591,7 @@ function acceptSuggestion(idx, opts = {}) {
   navigate({ shiftKey: !!opts.shiftKey });
 }
 
-function renderSuggestions() {
+function renderSuggestions(forceShowActive = false) {
   if (!suggestionsEl || !input) return;
   const raw = String(input.value || '');
   const q = raw.trim();
@@ -1587,10 +1600,10 @@ function renderSuggestions() {
   const candidates = Array.from(new Set(list.map((it) => it?.domain).filter(Boolean)));
 
   let items = [];
-  if (!q) {
-    if (!inputFocused) { hideSuggestions(); return; }
-    // Show active sessions when empty input is focused
-    items = getActiveSuggestions('').map((it) => ({ ...it }));
+  if (!q || forceShowActive) {
+    if (!inputFocused && !forceShowActive) { hideSuggestions(); return; }
+    // Show active sessions when empty input is focused or when forced
+    items = getActiveSuggestions(forceShowActive ? '' : '').map((it) => ({ ...it }));
   } else {
     const scored = candidates
       .map((c) => ({ c, m: fuzzyMatch(q, c) }))
@@ -1750,6 +1763,20 @@ function updateRefreshButtonUI() {
   } catch {}
 }
 
+function updateActiveCountBubble() {
+  try {
+    if (!activeCountBubble) return;
+    const count = activeLocations.size;
+    
+    if (count > 0) {
+      activeCountBubble.textContent = String(count);
+      activeCountBubble.classList.remove('hidden');
+    } else {
+      activeCountBubble.classList.add('hidden');
+    }
+  } catch {}
+}
+
 function updateCloseButtonUI() {
   try {
     const view = getVisibleWebView();
@@ -1774,6 +1801,8 @@ function updateCloseButtonUI() {
         closeActiveBtn.disabled = isBlankPage;
       }
     }
+    
+    updateActiveCountBubble();
   } catch {}
 }
 
@@ -1826,6 +1855,19 @@ closeActiveBtn?.addEventListener('click', (e) => {
 input.addEventListener('input', () => { renderSuggestions(); });
 input.addEventListener('focus', () => { renderSuggestions(); });
 input.addEventListener('click', () => { hideExtensionsPopover(); });
+
+// Active count bubble click - show active locations in suggestions
+activeCountBubble?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  try {
+    // Focus input and trigger suggestions showing active locations
+    if (input) {
+      input.focus();
+      renderSuggestions(true); // Force show active locations
+    }
+  } catch {}
+});
 
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
@@ -1989,6 +2031,7 @@ refreshUboToggle();
 updateNavButtons();
 updateRefreshButtonUI();
 updateCloseButtonUI();
+updateActiveCountBubble();
 
 // Focus on address bar when browser opens
 // Use delayed focus to ensure active sessions are loaded and suggestions can appear

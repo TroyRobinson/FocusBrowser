@@ -13,13 +13,16 @@
         <button id="nav-back-button" class="icon-button" type="button" aria-label="Back" title="Back (⌘/Ctrl+←)">←</button>
         <button id="nav-forward-button" class="icon-button" type="button" aria-label="Forward" title="Forward (⌘/Ctrl+→)" disabled>→</button>
         <button id="nav-refresh-button" class="icon-button" type="button" aria-label="Refresh" title="Refresh (⌘/Ctrl+R)">⟳</button>
-        <input
-          id="address-input"
-          class="address-input"
-          type="text"
-          spellcheck="false"
-          aria-label="Address bar"
-        />
+        <div class="address-input-container">
+          <input
+            id="address-input"
+            class="address-input"
+            type="text"
+            spellcheck="false"
+            aria-label="Address bar"
+          />
+          <span id="active-count-bubble" class="active-count-bubble hidden">0</span>
+        </div>
         <button id="close-active-button" class="icon-button hidden" type="button" aria-label="Close active session" title="Close active session">✕</button>
         <button id="extensions-button" class="icon-button" type="button" aria-label="Extensions">
           <svg class="icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
