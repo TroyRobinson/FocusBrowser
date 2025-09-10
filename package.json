@@ -1,21 +1,58 @@
 {
   "name": "focus-browser",
   "version": "1.0.0",
+  "productName": "Focus Browser",
   "main": "main.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "electron ."
+    "start": "electron .",
+    "forge:start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "devDependencies": {
-    "electron": "^27.3.11"
+    "electron": "^27.3.11",
+    "@electron-forge/cli": "^6",
+    "@electron-forge/maker-dmg": "^6",
+    "@electron-forge/maker-zip": "^6",
+    "@electron-forge/plugin-auto-unpack-natives": "^6"
   },
   "dependencies": {
     "@cliqz/adblocker-content": "^1.34.0",
     "@cliqz/adblocker-electron": "^1.34.0",
     "cross-fetch": "^4.1.0"
+  },
+  "config": {
+    "forge": {
+      "packagerConfig": {
+        "appBundleId": "com.focusbrowser.app",
+        "appCategoryType": "public.app-category.productivity",
+        "asar": true,
+        "osxSign": false
+      },
+      "makers": [
+        {
+          "name": "@electron-forge/maker-dmg",
+          "config": {
+            "format": "ULFO"
+          }
+        },
+        {
+          "name": "@electron-forge/maker-zip",
+          "platforms": ["darwin"]
+        }
+      ],
+      "plugins": [
+        {
+          "name": "@electron-forge/plugin-auto-unpack-natives",
+          "config": {}
+        }
+      ]
+    }
   }
 }
