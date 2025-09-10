@@ -329,6 +329,13 @@ function isUrlAllowed(urlStr) {
 }
 
 let bannerTimeout = null;
+let currentBannerAction = null; // Store the current action function for Enter key confirmation
+
+function clearBannerAction() {
+  // Clear only the keyboard confirmation, but keep the banner visible
+  currentBannerAction = null;
+}
+
 function clearBanner() {
   if (!banner) return;
   banner.classList.add('hidden');
@@ -336,6 +343,7 @@ function clearBanner() {
   banner.classList.remove('error');
   if (bannerTimeout) clearTimeout(bannerTimeout);
   bannerTimeout = null;
+  currentBannerAction = null; // Clear the action when banner is cleared
 }
 
 function showBanner(message, kind = '', durationMs = 900) {
@@ -371,9 +379,21 @@ function showActionBanner(message, actionLabel, onAction, kind = '', durationMs 
   btn.className = 'action-btn';
   btn.type = 'button';
   btn.textContent = actionLabel;
-  btn.addEventListener('click', () => {
-    try { onAction?.(); } finally { clearBanner(); }
-  });
+  
+  // Store the action function for keyboard confirmation
+  currentBannerAction = () => {
+    // Add flash effect to the button
+    btn.style.backgroundColor = '#2563eb'; // Brand blue flash
+    setTimeout(() => {
+      btn.style.backgroundColor = ''; // Reset to default
+    }, 200);
+    
+    setTimeout(() => {
+      try { onAction?.(); } finally { clearBanner(); }
+    }, 200); // Execute action after flash
+  };
+  
+  btn.addEventListener('click', currentBannerAction);
   
   const closeBtn = document.createElement('span');
   closeBtn.className = 'banner-close';
@@ -393,7 +413,6 @@ function showBlockedWithAdd(urlStr) {
   try {
     const u = new URL(urlStr);
     const host = u.hostname.toLowerCase();
-    const root = getRegistrableDomain(host);
     const wl = loadWhitelist();
     const pending = wl.find((it) => (host === it.domain || host.endsWith(`.${it.domain}`)) && !isActive(it));
     if (pending) {
@@ -403,8 +422,8 @@ function showBlockedWithAdd(urlStr) {
     } else {
       showActionBanner(
         `Blocked: ${host} is not in whitelist.`,
-        `Add ${root}`,
-        () => { addDomainWithDelay(root); },
+        `Add ${host}`,
+        () => { addDomainWithDelay(host); },
         'error',
         8000
       );
@@ -608,6 +627,22 @@ function renderWhitelist() {
 
       li.addEventListener('click', (e) => {
         const shift = !!e.shiftKey;
+        const cmd = !!e.metaKey || !!e.ctrlKey; // Command on Mac, Ctrl on Windows/Linux
+        
+        if (cmd) {
+          // Command+click: navigate to this domain
+          e.preventDefault();
+          e.stopPropagation();
+          try {
+            const url = normalizeToURL(item.domain);
+            if (url && input) {
+              input.value = item.domain;
+              navigate({ shiftKey: shift });
+            }
+          } catch {}
+          return;
+        }
+        
         if (shift && wlAnchorIndex != null) {
           const [a, b] = [wlAnchorIndex, idx].sort((x, y) => x - y);
           wlSelectedDomains = new Set();
@@ -1266,7 +1301,7 @@ function switchToWebView(el) {
   persistVisibleViewFor(el).catch(() => {});
 }
 
-function parkCurrentAsActive() {
+function parkCurrentAsActive(flashUI = false) {
   const el = getVisibleWebView();
   // If already an active view, do nothing
   for (const [, rec] of activeLocations) {
@@ -1284,8 +1319,18 @@ function parkCurrentAsActive() {
   }
   activeLocations.set(id, { id, title: '', url: currentURL, webview: el });
   debugLog('parkCurrentAsActive: created', { id, viewId: viewId(el), url: currentURL });
-  // Update bubble count
-  updateActiveCountBubble();
+  
+  // Update bubble count and close button UI
+  updateActiveCountBubble(flashUI);
+  updateCloseButtonUI();
+  
+  // Flash the close button to indicate the change (when triggered by Shift+Enter)
+  if (flashUI && closeActiveBtn) {
+    closeActiveBtn.style.backgroundColor = '#2563eb';
+    setTimeout(() => {
+      closeActiveBtn.style.backgroundColor = '';
+    }, 300);
+  }
   // Try to update title asynchronously
   setTimeout(() => {
     try {
@@ -1391,6 +1436,7 @@ function getActiveSuggestions(q) {
 }
 
 function navigate(opts = {}) {
+  clearBannerAction(); // Clear banner action when navigating
   const target = normalizeToURL(input.value);
   debugLog('navigate()', { targetRaw: input.value, target, shift: !!opts.shiftKey });
   if (!target) { debugLog('navigate: invalid target'); return; }
@@ -1571,6 +1617,7 @@ function fuzzyMatch(query, candidate) {
 }
 
 function acceptSuggestion(idx, opts = {}) {
+  clearBannerAction(); // Clear banner action when accepting suggestion
   if (!suggItems[idx]) return;
   const it = suggItems[idx];
   if (it.kind === 'active') {
@@ -1612,10 +1659,10 @@ function renderSuggestions(forceShowActive = false) {
       .slice(0, 8);
     const active = getActiveSuggestions(q).slice(0, 6);
 
-    // Only show the custom submit (typed) option when the user has either:
+    // Show the custom submit (typed) option when the user is typing a URL-like input:
     // - pressed space after a term (trailing space), e.g. "word "
-    // - added a period after a term (trailing period), e.g. "word."
-    const showTyped = raw.endsWith(' ') || raw.endsWith('.');
+    // - contains a period (typing a domain), e.g. "google.com", "example."
+    const showTyped = raw.endsWith(' ') || raw.includes('.');
 
     items = [
       ...active,
@@ -1624,7 +1671,16 @@ function renderSuggestions(forceShowActive = false) {
     ];
   }
   suggItems = items;
-  suggSelected = items.length > 0 ? 0 : -1;
+  
+  // When a typed option is present, prioritize it for selection
+  let initialSelection = 0;
+  if (items.length > 0) {
+    const typedIndex = items.findIndex(item => item.typed);
+    initialSelection = typedIndex >= 0 ? typedIndex : 0;
+  } else {
+    initialSelection = -1;
+  }
+  suggSelected = initialSelection;
   suggestionsEl.innerHTML = '';
   items.forEach((it, idx) => {
     const li = document.createElement('li');
@@ -1644,7 +1700,7 @@ function renderSuggestions(forceShowActive = false) {
       closeBtn.textContent = '×';
       closeBtn.addEventListener('mousedown', (e) => {
         e.preventDefault(); e.stopPropagation();
-        try { closeActiveById(it.id); } finally { renderSuggestions(); }
+        try { closeActiveById(it.id); } finally { renderSuggestions(true); }
       });
       left.appendChild(strongFrag);
       left.appendChild(hint);
@@ -1763,7 +1819,7 @@ function updateRefreshButtonUI() {
   } catch {}
 }
 
-function updateActiveCountBubble() {
+function updateActiveCountBubble(flash = false) {
   try {
     if (!activeCountBubble) return;
     const count = activeLocations.size;
@@ -1771,6 +1827,14 @@ function updateActiveCountBubble() {
     if (count > 0) {
       activeCountBubble.textContent = String(count);
       activeCountBubble.classList.remove('hidden');
+      
+      if (flash) {
+        // Flash with a brighter blue
+        activeCountBubble.style.backgroundColor = '#2563eb'; // Brighter blue flash
+        setTimeout(() => {
+          activeCountBubble.style.backgroundColor = ''; // Reset to CSS default
+        }, 300);
+      }
     } else {
       activeCountBubble.classList.add('hidden');
     }
@@ -1852,7 +1916,10 @@ closeActiveBtn?.addEventListener('click', (e) => {
 });
 
 // Input interactions
-input.addEventListener('input', () => { renderSuggestions(); });
+input.addEventListener('input', () => { 
+  clearBannerAction(); // Clear banner action when user types
+  renderSuggestions(); 
+});
 input.addEventListener('focus', () => { renderSuggestions(); });
 input.addEventListener('click', () => { hideExtensionsPopover(); });
 
@@ -1873,10 +1940,22 @@ input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     debugLog('keydown Enter', { shift: !!e.shiftKey, suggSelected });
     e.preventDefault();
-    // If Shift is held, park the current view first, regardless of destination type
-    if (e.shiftKey) {
-      try { parkCurrentAsActive(); } catch {}
+    
+    // Check if there's a banner action available for confirmation
+    if (currentBannerAction && banner && !banner.classList.contains('hidden')) {
+      currentBannerAction();
+      return;
     }
+    
+    // If Shift is held, just park the current view and don't navigate
+    if (e.shiftKey) {
+      try { 
+        parkCurrentAsActive(true); // Flash the UI when triggered by Shift+Enter
+        // Return early - no navigation
+        return;
+      } catch {}
+    }
+    
     if (suggSelected >= 0) {
       acceptSuggestion(suggSelected, { shiftKey: e.shiftKey });
     } else {
@@ -1885,11 +1964,13 @@ input.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === 'ArrowDown') {
+    clearBannerAction(); // Clear banner action on arrow navigation
     if (!suggestionsEl || suggestionsEl.classList.contains('hidden')) { renderSuggestions(); return; }
     const last = suggItems.length - 1;
     suggSelected = Math.min(last, suggSelected + 1);
     updateSuggestionSelection();
   } else if (e.key === 'ArrowUp') {
+    clearBannerAction(); // Clear banner action on arrow navigation
     const min = 0;
     suggSelected = Math.max(min, suggSelected - 1);
     updateSuggestionSelection();
@@ -1907,10 +1988,11 @@ input.addEventListener('keydown', (e) => {
         e.preventDefault();
         try { closeActiveById(it.id); } catch {}
         // Re-render suggestions to reflect removal
-        renderSuggestions();
+        renderSuggestions(true);
       }
     }
   } else if (e.key === 'Escape') {
+    clearBannerAction(); // Clear banner action on escape
     hideSuggestions();
   }
 });
@@ -1928,12 +2010,19 @@ document.addEventListener('click', (e) => {
   if (!suggestionsEl) return;
   const target = e.target;
   if (!(target instanceof Node)) return;
+  
+  // Clear banner action if clicking outside input and banner
+  if (!input.contains(target) && (!banner || !banner.contains(target))) {
+    clearBannerAction();
+  }
+  
   if (suggestionsEl.contains(target) || input.contains(target)) return;
   hideSuggestions();
 });
 
 // Hide dropdowns when window loses focus (e.g., clicking webview)
 window.addEventListener('blur', () => {
+  clearBannerAction(); // Clear banner action when focus leaves window
   hideSuggestions();
   hideExtensionsPopover();
 });
@@ -2077,6 +2166,7 @@ try {
         try {
           input?.focus?.();
           input?.select?.();
+          renderSuggestions(true); // Force show active locations
         } catch {}
         break;
       default:
