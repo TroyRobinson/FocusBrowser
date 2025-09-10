@@ -107,18 +107,24 @@
             <div class="llm-setting-group">
               <label for="llm-api-key" class="llm-label">OpenRouter API Key</label>
               <input id="llm-api-key" class="llm-input" type="password" placeholder="Enter your OpenRouter API key" />
+              <span id="llm-api-key-countdown" class="llm-countdown hidden" aria-live="polite"></span>
+              <button id="llm-api-key-cancel" class="llm-cancel hidden" title="Cancel pending change">×</button>
               <small class="llm-help">Get your API key from <a href="https://openrouter.ai/keys" target="_blank">OpenRouter</a></small>
             </div>
             
             <div class="llm-setting-group">
               <label for="llm-model" class="llm-label">Model</label>
               <input id="llm-model" class="llm-input" type="text" placeholder="openai/gpt-3.5-turbo" />
+              <span id="llm-model-countdown" class="llm-countdown hidden" aria-live="polite"></span>
+              <button id="llm-model-cancel" class="llm-cancel hidden" title="Cancel pending change">×</button>
               <small class="llm-help">Model identifier from OpenRouter (e.g., openai/gpt-4, anthropic/claude-3-haiku)</small>
             </div>
             
             <div class="llm-setting-group">
               <label for="llm-system-prompt" class="llm-label">System Prompt</label>
               <textarea id="llm-system-prompt" class="llm-textarea" rows="4" placeholder="You are a helpful AI assistant. Provide clear, concise answers."></textarea>
+              <span id="llm-system-prompt-countdown" class="llm-countdown hidden" aria-live="polite"></span>
+              <button id="llm-system-prompt-cancel" class="llm-cancel hidden" title="Cancel pending change">×</button>
               <small class="llm-help">Instructions for the AI model</small>
             </div>
             

@@ -162,6 +162,12 @@ const LLM_API_KEY_KEY = 'llm_api_key';
 const LLM_MODEL_KEY = 'llm_model';
 const LLM_SYSTEM_PROMPT_KEY = 'llm_system_prompt';
 
+// LLM pending settings keys (for delay mechanism)
+const LLM_PENDING_API_KEY_KEY = 'llm_pending_api_key';
+const LLM_PENDING_MODEL_KEY = 'llm_pending_model';
+const LLM_PENDING_SYSTEM_PROMPT_KEY = 'llm_pending_system_prompt';
+const LLM_PENDING_AT_KEY = 'llm_pending_activate_at';
+
 // AI conversation tracking
 let currentConversation = null; // { messages: [], webview: element }
 
@@ -360,9 +366,111 @@ function promotePendingIfDue() {
   }
 }
 
+// LLM pending settings management functions - per field
+function getPendingLLMSetting(field) {
+  try {
+    const atRaw = localStorage.getItem(`${LLM_PENDING_AT_KEY}_${field}`);
+    if (atRaw == null) return null;
+    const activateAt = Number(atRaw);
+    if (!Number.isFinite(activateAt) || activateAt <= Date.now()) return null;
+    
+    const value = localStorage.getItem(`llm_pending_${field}`);
+    return { value, activateAt };
+  } catch {
+    return null;
+  }
+}
+
+function getPendingLLMSettings() {
+  return {
+    apiKey: getPendingLLMSetting('apiKey'),
+    model: getPendingLLMSetting('model'),
+    systemPrompt: getPendingLLMSetting('systemPrompt')
+  };
+}
+
+async function clearPendingLLMSetting(field) {
+  await safeRemoveItem(`llm_pending_${field}`);
+  await safeRemoveItem(`${LLM_PENDING_AT_KEY}_${field}`);
+}
+
+async function clearPendingLLMSettings() {
+  await clearPendingLLMSetting('apiKey');
+  await clearPendingLLMSetting('model');
+  await clearPendingLLMSetting('systemPrompt');
+}
+
+async function promotePendingLLMSettingIfDue(field) {
+  try {
+    const atRaw = localStorage.getItem(`${LLM_PENDING_AT_KEY}_${field}`);
+    if (atRaw == null) return false;
+    const at = Number(atRaw);
+    if (!Number.isFinite(at)) { clearPendingLLMSetting(field); return false; }
+    if (Date.now() >= at) {
+      const value = localStorage.getItem(`llm_pending_${field}`);
+      const currentSettings = await loadLLMSettings();
+      const newSettings = { ...currentSettings, [field]: value };
+      
+      await saveLLMSettings(newSettings);
+      await clearPendingLLMSetting(field);
+      
+      // Reset dirty flag for this field when promoted
+      llmInputsDirty[field] = false;
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function promotePendingLLMSettingsIfDue() {
+  const apiKeyPromoted = await promotePendingLLMSettingIfDue('apiKey');
+  const modelPromoted = await promotePendingLLMSettingIfDue('model');
+  const systemPromptPromoted = await promotePendingLLMSettingIfDue('systemPrompt');
+  return apiKeyPromoted || modelPromoted || systemPromptPromoted;
+}
+
+async function schedulePendingLLMSetting(field, newValue) {
+  const delayMinutes = getDelayMinutes();
+  if (delayMinutes === 0) {
+    // Immediate effect, no countdown
+    const currentSettings = await loadLLMSettings();
+    const updatedSettings = { ...currentSettings, [field]: newValue };
+    await saveLLMSettings(updatedSettings);
+    await clearPendingLLMSetting(field);
+    return { immediate: true };
+  }
+  const activateAt = Date.now() + delayMinutes * 60 * 1000;
+  await safeSetItem(`llm_pending_${field}`, newValue);
+  await safeSetItem(`${LLM_PENDING_AT_KEY}_${field}`, String(activateAt));
+  return { immediate: false, activateAt };
+}
+
+async function schedulePendingLLMSettings(newSettings) {
+  const currentSettings = await loadLLMSettings();
+  const results = { immediate: true, hasChanges: false };
+  
+  // Only schedule changes for fields that actually changed
+  for (const [field, newValue] of Object.entries(newSettings)) {
+    if (currentSettings[field] !== newValue) {
+      const result = await schedulePendingLLMSetting(field, newValue);
+      results.hasChanges = true;
+      if (!result.immediate) {
+        results.immediate = false;
+        results.activateAt = result.activateAt;
+      }
+    }
+  }
+  
+  return results;
+}
+
 function getDelayMinutes() {
   // Returns the current effective delay; promotes pending if due.
   promotePendingIfDue();
+  // Note: promotePendingLLMSettingsIfDue is async but called from timer - it will run async
+  promotePendingLLMSettingsIfDue();
   const raw = localStorage.getItem(DELAY_KEY);
   return sanitizeDelay(raw);
 }
@@ -590,6 +698,18 @@ const llmModelInput = document.getElementById('llm-model');
 const llmSystemPromptInput = document.getElementById('llm-system-prompt');
 const llmSaveButton = document.getElementById('llm-save-button');
 
+// LLM Settings Cancel Buttons
+const llmApiKeyCancelButton = document.getElementById('llm-api-key-cancel');
+const llmModelCancelButton = document.getElementById('llm-model-cancel');
+const llmSystemPromptCancelButton = document.getElementById('llm-system-prompt-cancel');
+
+// LLM settings controls state
+let llmInputsDirty = {
+  apiKey: false,
+  model: false,
+  systemPrompt: false
+};
+
 function fmtRemaining(ms) {
   if (ms <= 0) return '';
   const totalSec = Math.ceil(ms / 1000);
@@ -609,6 +729,7 @@ function startCountdown() {
     if (!settingsView || settingsView.classList.contains('hidden')) return;
     renderWhitelist();
     renderDelayControls?.();
+    renderLLMSettings?.();
   }, 1000);
 }
 function stopCountdown() {
@@ -966,6 +1087,8 @@ llmTab?.addEventListener('click', () => {
   switchToTab('llm');
   // Load settings when switching to LLM tab
   loadLLMSettingsToForm();
+  llmInputsDirty = { apiKey: false, model: false, systemPrompt: false };
+  renderLLMSettings();
 });
 
 // LLM Settings save
@@ -977,15 +1100,57 @@ llmSaveButton?.addEventListener('click', async () => {
       systemPrompt: llmSystemPromptInput?.value || 'You are a helpful AI assistant. Provide clear, concise answers.'
     };
     
-    const success = await saveLLMSettings(settings);
-    if (success) {
+    const result = await schedulePendingLLMSettings(settings);
+    if (!result.hasChanges) {
+      showBanner('No changes to save', '', 3000);
+    } else if (result.immediate) {
       showBanner('LLM settings saved successfully!', '', 3000);
     } else {
-      showBanner('Failed to save LLM settings', 'error', 5000);
+      const delayMinutes = getDelayMinutes();
+      showBanner(`LLM settings changes will take effect in ${delayMinutes} minute${delayMinutes !== 1 ? 's' : ''}`, '', 5000);
     }
+    
+    // Reset dirty flags after save
+    llmInputsDirty = { apiKey: false, model: false, systemPrompt: false };
+    renderLLMSettings();
   } catch (error) {
     showBanner(`Error saving LLM settings: ${error.message}`, 'error', 5000);
   }
+});
+
+// LLM Cancel Button Event Listeners
+llmApiKeyCancelButton?.addEventListener('click', async () => {
+  await clearPendingLLMSetting('apiKey');
+  llmInputsDirty.apiKey = false;
+  renderLLMSettings();
+  showBanner('Pending API key change cancelled', '', 3000);
+});
+
+llmModelCancelButton?.addEventListener('click', async () => {
+  await clearPendingLLMSetting('model');
+  llmInputsDirty.model = false;
+  renderLLMSettings();
+  showBanner('Pending model change cancelled', '', 3000);
+});
+
+llmSystemPromptCancelButton?.addEventListener('click', async () => {
+  await clearPendingLLMSetting('systemPrompt');
+  llmInputsDirty.systemPrompt = false;
+  renderLLMSettings();
+  showBanner('Pending system prompt change cancelled', '', 3000);
+});
+
+// LLM Input Event Listeners for dirty state tracking
+llmApiKeyInput?.addEventListener('input', () => {
+  llmInputsDirty.apiKey = true;
+});
+
+llmModelInput?.addEventListener('input', () => {
+  llmInputsDirty.model = true;
+});
+
+llmSystemPromptInput?.addEventListener('input', () => {
+  llmInputsDirty.systemPrompt = true;
 });
 
 backBtn?.addEventListener('click', () => {
@@ -1073,6 +1238,51 @@ function renderDelayControls() {
   if (delaySaveBtn && pending && delayCancelHover) {
     delaySaveBtn.disabled = false;
   }
+}
+
+async function renderLLMSettings() {
+  await promotePendingLLMSettingsIfDue();
+  const pendingSettings = getPendingLLMSettings();
+  
+  // Get current effective settings
+  const currentSettings = await loadLLMSettings();
+  
+  // Update each field with countdown and disabled state
+  const fields = [
+    { input: llmApiKeyInput, countdown: document.getElementById('llm-api-key-countdown'), cancel: document.getElementById('llm-api-key-cancel'), key: 'apiKey' },
+    { input: llmModelInput, countdown: document.getElementById('llm-model-countdown'), cancel: document.getElementById('llm-model-cancel'), key: 'model' },
+    { input: llmSystemPromptInput, countdown: document.getElementById('llm-system-prompt-countdown'), cancel: document.getElementById('llm-system-prompt-cancel'), key: 'systemPrompt' }
+  ];
+  
+  fields.forEach(field => {
+    if (!field.input || !field.countdown || !field.cancel) return;
+    
+    const fieldPending = pendingSettings[field.key];
+    
+    if (fieldPending) {
+      // Show countdown and cancel button for this field
+      const remaining = Math.max(0, fieldPending.activateAt - Date.now());
+      const label = fmtRemaining(remaining) || '0:00';
+      field.countdown.textContent = label;
+      field.countdown.classList.remove('hidden');
+      field.cancel.classList.remove('hidden');
+      
+      // Disable the input and show pending value
+      field.input.disabled = true;
+      field.input.value = fieldPending.value || '';
+    } else {
+      // Hide countdown and cancel button for this field
+      field.countdown.textContent = '';
+      field.countdown.classList.add('hidden');
+      field.cancel.classList.add('hidden');
+      
+      // Enable the input and show current effective value (only if not dirty)
+      field.input.disabled = false;
+      if (!llmInputsDirty[field.key] && field.input.value !== currentSettings[field.key]) {
+        field.input.value = currentSettings[field.key] || '';
+      }
+    }
+  });
 }
 
 delayInput?.addEventListener('input', () => {

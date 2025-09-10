@@ -698,3 +698,37 @@ webview#webview {
 .llm-help a:hover {
   text-decoration: underline;
 }
+
+.llm-countdown {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  margin-left: 8px;
+  display: inline-block;
+}
+
+.llm-cancel {
+  background: transparent;
+  border: 1px solid var(--input-border);
+  color: var(--muted);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: 4px;
+  line-height: 1;
+  display: inline-block;
+}
+
+.llm-cancel:hover {
+  background: var(--input-bg);
+  color: var(--fg);
+}
+
+.llm-input:disabled,
+.llm-textarea:disabled {
+  background: var(--input-bg);
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
