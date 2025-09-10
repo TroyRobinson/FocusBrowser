@@ -1,6 +1,40 @@
+// Check if input is an AI query (contains space after first word OR is a single non-URL word)
+function isAIQuery(input) {
+  const trimmed = (input || '').trim();
+  if (!trimmed) return false;
+  
+  // Check for multi-word queries (original logic)
+  const spaceIndex = trimmed.indexOf(' ');
+  if (spaceIndex > 0) {
+    // Ensure there's meaningful content after the space
+    const afterSpace = trimmed.slice(spaceIndex + 1).trim();
+    return afterSpace.length > 0;
+  }
+  
+  // Check for single-word queries
+  // Treat as AI query if it's a single word that doesn't look like a URL
+  if (spaceIndex === -1) {
+    // Exclude if it looks like a URL or domain
+    if (trimmed.includes('.') && !trimmed.endsWith('.')) return false; // Has dots (likely domain)
+    if (trimmed.includes('://')) return false; // Has protocol
+    if (trimmed.includes('/') && trimmed.length > 3) return false; // Has path
+    if (trimmed.includes('@')) return false; // Looks like email
+    
+    // Allow single words, especially with punctuation that suggests questions
+    return true;
+  }
+  
+  return false;
+}
+
 function normalizeToURL(input) {
   const trimmed = (input || '').trim();
   if (!trimmed) return null;
+  
+  // Check if it's an AI query first
+  if (isAIQuery(trimmed)) {
+    return `ai-chat://query/${encodeURIComponent(trimmed)}`;
+  }
 
   // If missing scheme, default to https://
   const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed);
@@ -20,6 +54,21 @@ function updateAddressBarWithURL(url) {
   if (!input) return;
   if (url === 'about:blank') {
     input.value = '';
+  } else if (url && url.startsWith('data:text/html;charset=utf-8,')) {
+    // Check if this is an AI chat data URL by looking for AI chat HTML content
+    try {
+      const decoded = decodeURIComponent(url.replace('data:text/html;charset=utf-8,', ''));
+      if (decoded.includes('AI Chat -') && decoded.includes('Your Question')) {
+        // Extract query from the HTML title
+        const titleMatch = decoded.match(/<title>AI Chat - (.*?)<\/title>/);
+        if (titleMatch && titleMatch[1]) {
+          input.value = `AI: ${titleMatch[1]}`;
+          return;
+        }
+      }
+    } catch {}
+    // Fall back to generic AI display if we can't extract the query
+    input.value = 'AI Chat';
   } else {
     input.value = url || input.value;
   }
@@ -108,6 +157,30 @@ const SORT_MODE_KEY = 'wl_sort_mode_v1'; // 'recent' | 'abc'
 const ACTIVE_SESSIONS_KEY = 'active_sessions_v1';
 const VISIBLE_VIEW_KEY = 'visible_view_v1';
 
+// LLM settings keys
+const LLM_API_KEY_KEY = 'llm_api_key';
+const LLM_MODEL_KEY = 'llm_model';
+const LLM_SYSTEM_PROMPT_KEY = 'llm_system_prompt';
+
+// AI conversation tracking
+let currentConversation = null; // { messages: [], webview: element }
+
+function resetConversationIfNeeded(webview, newURL) {
+  // Reset conversation when navigating away from AI chat
+  if (currentConversation && currentConversation.webview === webview) {
+    const isAIChat = newURL && newURL.startsWith('data:text/html') && 
+                     (newURL.includes('AI%20Chat') || newURL.includes('AI Chat'));
+    if (!isAIChat) {
+      debugLog('resetting conversation', { id: viewId(webview), newURL });
+      currentConversation = null;
+      // Reset address bar placeholder
+      if (input) {
+        input.placeholder = '';
+      }
+    }
+  }
+}
+
 // Cached sort mode for synchronous access
 let cachedSortMode = 'recent';
 
@@ -165,6 +238,34 @@ async function safeRemoveItem(key) {
     return true;
   } catch {
     localStorage.removeItem(key);
+    return false;
+  }
+}
+
+// LLM Settings functions
+async function loadLLMSettings() {
+  try {
+    const apiKey = await safeGetItem(LLM_API_KEY_KEY) || '';
+    const model = await safeGetItem(LLM_MODEL_KEY) || 'openai/gpt-3.5-turbo';
+    const systemPrompt = await safeGetItem(LLM_SYSTEM_PROMPT_KEY) || 'You are a helpful AI assistant. Provide clear, concise answers.';
+    
+    return { apiKey, model, systemPrompt };
+  } catch {
+    return {
+      apiKey: '',
+      model: 'openai/gpt-3.5-turbo',
+      systemPrompt: 'You are a helpful AI assistant. Provide clear, concise answers.'
+    };
+  }
+}
+
+async function saveLLMSettings(settings) {
+  try {
+    await safeSetItem(LLM_API_KEY_KEY, settings.apiKey || '');
+    await safeSetItem(LLM_MODEL_KEY, settings.model || 'openai/gpt-3.5-turbo');
+    await safeSetItem(LLM_SYSTEM_PROMPT_KEY, settings.systemPrompt || 'You are a helpful AI assistant. Provide clear, concise answers.');
+    return true;
+  } catch {
     return false;
   }
 }
@@ -321,6 +422,7 @@ function isUrlAllowed(urlStr) {
   try {
     const u = new URL(urlStr);
     if (u.protocol === 'about:') return true;
+    if (u.protocol === 'data:' && urlStr.startsWith('data:text/html')) return true; // Allow HTML data URLs
     if (u.hostname) return isHostAllowed(u.hostname);
     return false;
   } catch {
@@ -475,6 +577,18 @@ const addDomainForm = document.getElementById('add-domain-form');
 const domainInput = document.getElementById('domain-input');
 const domainList = document.getElementById('domain-list');
 const sortToggle = document.getElementById('sort-toggle');
+
+// Settings tabs
+const whitelistTab = document.getElementById('whitelist-tab');
+const llmTab = document.getElementById('llm-tab');
+const whitelistContent = document.getElementById('whitelist-content');
+const llmContent = document.getElementById('llm-content');
+
+// LLM Settings
+const llmApiKeyInput = document.getElementById('llm-api-key');
+const llmModelInput = document.getElementById('llm-model');
+const llmSystemPromptInput = document.getElementById('llm-system-prompt');
+const llmSaveButton = document.getElementById('llm-save-button');
 
 function fmtRemaining(ms) {
   if (ms <= 0) return '';
@@ -749,6 +863,8 @@ settingsBtn?.addEventListener('click', () => {
         if (t) t.textContent = isRecent ? 'recent' : 'abc';
       }
     } catch {}
+    // Make sure we're on the whitelist tab when opening settings
+    switchToTab('whitelist');
     renderWhitelist();
     initDelayControls?.();
     startCountdown();
@@ -812,6 +928,65 @@ settingsBtn?.addEventListener('click', () => {
   }
   document.addEventListener('keydown', handler, true);
 })();
+
+// Settings Tab Management
+function switchToTab(tabName) {
+  // Update tab buttons
+  const tabs = [whitelistTab, llmTab];
+  const contents = [whitelistContent, llmContent];
+  
+  tabs.forEach(tab => tab?.classList.remove('active'));
+  contents.forEach(content => content?.classList.remove('active'));
+  
+  if (tabName === 'llm') {
+    llmTab?.classList.add('active');
+    llmContent?.classList.add('active');
+  } else {
+    whitelistTab?.classList.add('active');
+    whitelistContent?.classList.add('active');
+  }
+}
+
+// Load LLM settings into form
+async function loadLLMSettingsToForm() {
+  try {
+    const settings = await loadLLMSettings();
+    if (llmApiKeyInput) llmApiKeyInput.value = settings.apiKey || '';
+    if (llmModelInput) llmModelInput.value = settings.model || 'openai/gpt-3.5-turbo';
+    if (llmSystemPromptInput) llmSystemPromptInput.value = settings.systemPrompt || 'You are a helpful AI assistant. Provide clear, concise answers.';
+  } catch {}
+}
+
+// Tab event listeners
+whitelistTab?.addEventListener('click', () => {
+  switchToTab('whitelist');
+});
+
+llmTab?.addEventListener('click', () => {
+  switchToTab('llm');
+  // Load settings when switching to LLM tab
+  loadLLMSettingsToForm();
+});
+
+// LLM Settings save
+llmSaveButton?.addEventListener('click', async () => {
+  try {
+    const settings = {
+      apiKey: llmApiKeyInput?.value || '',
+      model: llmModelInput?.value || 'openai/gpt-3.5-turbo',
+      systemPrompt: llmSystemPromptInput?.value || 'You are a helpful AI assistant. Provide clear, concise answers.'
+    };
+    
+    const success = await saveLLMSettings(settings);
+    if (success) {
+      showBanner('LLM settings saved successfully!', '', 3000);
+    } else {
+      showBanner('Failed to save LLM settings', 'error', 5000);
+    }
+  } catch (error) {
+    showBanner(`Error saving LLM settings: ${error.message}`, 'error', 5000);
+  }
+});
 
 backBtn?.addEventListener('click', () => {
   setSettingsVisible(false);
@@ -1102,6 +1277,10 @@ function wireWebView(el) {
   // Update address bar when navigation occurs
   el.addEventListener('did-navigate', (e) => {
     debugLog('did-navigate', { id: viewId(el), url: e.url });
+    
+    // Reset conversation if navigating away from AI chat
+    resetConversationIfNeeded(el, e.url);
+    
     if (el === getVisibleWebView()) {
       updateAddressBarWithURL(e.url);
     }
@@ -1435,11 +1614,348 @@ function getActiveSuggestions(q) {
   return items;
 }
 
+// AI Chat functionality
+async function performAIChat(query, conversationHistory = []) {
+  try {
+    const settings = await loadLLMSettings();
+    if (!settings.apiKey) {
+      showBanner('OpenRouter API key not configured. Please set it in Settings.', 'error', 5000);
+      return null;
+    }
+
+    // Build messages array with conversation history
+    const messages = [
+      {
+        role: 'system',
+        content: settings.systemPrompt || 'You are a helpful AI assistant. Provide clear, concise answers.'
+      },
+      ...conversationHistory,
+      {
+        role: 'user',
+        content: query
+      }
+    ];
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${settings.apiKey}`,
+        'Content-Type': 'application/json',
+        'X-Title': 'Focus Browser'
+      },
+      body: JSON.stringify({
+        model: settings.model || 'openai/gpt-3.5-turbo',
+        messages,
+        stream: false
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return {
+      content: data.choices[0]?.message?.content || 'No response received.',
+      model: settings.model || 'openai/gpt-3.5-turbo'
+    };
+  } catch (error) {
+    console.error('AI Chat Error:', error);
+    return {
+      content: `Error: ${error.message}`,
+      model: 'Error',
+      isError: true
+    };
+  }
+}
+
+function generateAIChatHTML(conversation, isLoading = false) {
+  const messages = conversation.messages || [];
+  const lastMessage = messages[messages.length - 1];
+  const query = messages.find(m => m.role === 'user')?.content || '';
+  
+  // Generate conversation HTML (newest first)
+  let conversationHTML = '';
+  
+  // Add loading indicator first if needed (it's the "newest" message)
+  if (isLoading) {
+    conversationHTML += `
+      <div class="message assistant-message loading">
+        <div class="message-label">Assistant</div>
+        <div class="message-text">Thinking...</div>
+      </div>
+    `;
+  }
+  
+  // Reverse the order to show newest messages first
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === 'user') {
+      conversationHTML += `
+        <div class="message user-message">
+          <div class="message-label">You</div>
+          <div class="message-text">${msg.content}</div>
+        </div>
+      `;
+    } else if (msg.role === 'assistant') {
+      const isError = msg.isError;
+      const modelInfo = msg.model ? `<span class="model-info">${msg.model}</span>` : '';
+      conversationHTML += `
+        <div class="message assistant-message ${isError ? 'error' : ''}">
+          <div class="message-label">Assistant${modelInfo}</div>
+          <div class="message-text">${msg.content}</div>
+        </div>
+      `;
+    }
+  }
+  
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>AI Chat - ${query}</title>
+        <style>
+            /* Sleek dark scrollbars */
+            * {
+                scrollbar-width: thin;
+                scrollbar-color: #3a3f4a #1a1f28;
+            }
+            
+            *::-webkit-scrollbar {
+                width: 8px;
+                height: 8px;
+            }
+            
+            *::-webkit-scrollbar-track {
+                background: #1a1f28;
+            }
+            
+            *::-webkit-scrollbar-thumb {
+                background: #3a3f4a;
+                border-radius: 4px;
+            }
+            
+            *::-webkit-scrollbar-thumb:hover {
+                background: #4a5061;
+            }
+            
+            *::-webkit-scrollbar-corner {
+                background: #1a1f28;
+            }
+            
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                margin: 0;
+                padding: 20px;
+                background: #1a1a1a;
+                color: #ffffff;
+                line-height: 1.6;
+            }
+            .container {
+                max-width: 800px;
+                margin: 0 auto;
+            }
+            .message {
+                margin-bottom: 20px;
+            }
+            .user-message {
+                background: #2a2a2a;
+                padding: 16px 20px;
+                border-radius: 12px;
+                border-left: 4px solid #007acc;
+            }
+            .assistant-message {
+                background: #2a2a2a;
+                padding: 16px 20px;
+                border-radius: 12px;
+                border-left: 4px solidrgb(0, 163, 204);
+            }
+            .assistant-message.error {
+                border-left-color: #ff4444;
+            }
+            .message-label {
+                font-size: 12px;
+                color: #888;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-bottom: 8px;
+                font-weight: 600;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .model-info {
+                font-size: 10px;
+                color: #666;
+                font-weight: 400;
+                text-transform: none;
+                letter-spacing: normal;
+            }
+            .message-text {
+                font-size: 16px;
+                font-weight: 400;
+            }
+            .user-message .message-text {
+                font-weight: 500;
+            }
+            .loading {
+                opacity: 0.6;
+                animation: pulse 1.5s ease-in-out infinite;
+            }
+            .loading .message-text {
+                font-style: italic;
+            }
+            @keyframes pulse {
+                0%, 100% { opacity: 0.6; }
+                50% { opacity: 1; }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            ${conversationHTML}
+        </div>
+    </body>
+    </html>
+  `;
+}
+
+async function handleAIChat(query, opts = {}) {
+  debugLog('handleAIChat', { query, shift: !!opts.shiftKey });
+  
+  const shiftKey = !!opts.shiftKey;
+  const current = getVisibleWebView();
+  
+  // Check if this is a follow-up to existing conversation
+  const isFollowUp = currentConversation && currentConversation.webview === current && 
+                     current.getURL().startsWith('data:text/html') && 
+                     (current.getURL().includes('AI%20Chat') || current.getURL().includes('AI Chat'));
+  
+  let conversation;
+  if (isFollowUp) {
+    // Add new user message to existing conversation
+    conversation = currentConversation;
+    conversation.messages.push({ role: 'user', content: query });
+  } else {
+    // Start new conversation
+    conversation = {
+      messages: [{ role: 'user', content: query }],
+      webview: null // Will be set after webview is determined
+    };
+    currentConversation = conversation;
+  }
+  
+  // Create initial HTML with loading state
+  const loadingHTML = generateAIChatHTML(conversation, true);
+  const dataURL = `data:text/html;charset=utf-8,${encodeURIComponent(loadingHTML)}`;
+  
+  let dest = current;
+  
+  // Handle webview management (only for new conversations)
+  if (!isFollowUp) {
+    if (shiftKey) {
+      parkCurrentAsActive();
+      dest = ensurePrimaryWebView();
+      setLastAllowed(dest, dataURL);
+      debugLog('set AI chat src (shift)', { id: viewId(dest), query });
+      try { dest.setAttribute('src', dataURL); } catch { dest.src = dataURL; }
+      closeSettingsOnLoad(dest);
+      switchToWebView(dest);
+    } else {
+      let mustSwitch = false;
+      for (const [, rec] of activeLocations) {
+        if (rec.webview === current) { mustSwitch = true; break; }
+      }
+      if (mustSwitch) {
+        dest = ensurePrimaryWebView();
+        setLastAllowed(dest, dataURL);
+        debugLog('set AI chat src (leave-active)', { id: viewId(dest), query });
+        try { dest.setAttribute('src', dataURL); } catch { dest.src = dataURL; }
+        switchToWebView(dest);
+        leaveSettingsIfOpen();
+      } else {
+        setLastAllowed(dest, dataURL);
+        debugLog('set AI chat src (reuse)', { id: viewId(dest), query });
+        try { dest.setAttribute('src', dataURL); } catch { dest.src = dataURL; }
+        closeSettingsOnLoad(dest);
+      }
+    }
+    conversation.webview = dest;
+  } else {
+    // For follow-ups, just update the current webview with loading state
+    debugLog('set AI chat src (follow-up)', { id: viewId(dest), query });
+    try { dest.setAttribute('src', dataURL); } catch { dest.src = dataURL; }
+  }
+  
+  // Perform AI request and update page
+  try {
+    // Get conversation history (excluding system messages for API)
+    const conversationHistory = conversation.messages.slice(0, -1); // Exclude the new user message
+    const response = await performAIChat(query, conversationHistory);
+    
+    if (response) {
+      // Add assistant response to conversation
+      conversation.messages.push({ 
+        role: 'assistant', 
+        content: response.content,
+        model: response.model,
+        isError: response.isError 
+      });
+      
+      // Generate updated conversation HTML
+      const resultHTML = generateAIChatHTML(conversation);
+      const resultDataURL = `data:text/html;charset=utf-8,${encodeURIComponent(resultHTML)}`;
+      
+      // Update the webview with the result
+      const targetView = getVisibleWebView();
+      if (targetView) {
+        debugLog('updating AI chat with response', { id: viewId(targetView), hasResponse: !!response });
+        try { targetView.setAttribute('src', resultDataURL); } catch { targetView.src = resultDataURL; }
+        
+        // Clear address bar and focus for follow-up message
+        setTimeout(() => {
+          if (input) {
+            input.value = '';
+            input.focus();
+            input.placeholder = 'Continue the conversation...';
+          }
+        }, 500);
+      }
+    }
+  } catch (error) {
+    console.error('AI Chat error:', error);
+    // Add error to conversation
+    conversation.messages.push({ 
+      role: 'assistant', 
+      content: `Error: ${error.message}`,
+      isError: true 
+    });
+    
+    const errorHTML = generateAIChatHTML(conversation);
+    const errorDataURL = `data:text/html;charset=utf-8,${encodeURIComponent(errorHTML)}`;
+    
+    const targetView = getVisibleWebView();
+    if (targetView) {
+      try { targetView.setAttribute('src', errorDataURL); } catch { targetView.src = errorDataURL; }
+    }
+  }
+}
+
 function navigate(opts = {}) {
   clearBannerAction(); // Clear banner action when navigating
   const target = normalizeToURL(input.value);
   debugLog('navigate()', { targetRaw: input.value, target, shift: !!opts.shiftKey });
   if (!target) { debugLog('navigate: invalid target'); return; }
+  
+  // Handle AI Chat URLs BEFORE whitelist check
+  if (target.startsWith('ai-chat://query/')) {
+    const query = decodeURIComponent(target.replace('ai-chat://query/', ''));
+    handleAIChat(query, opts);
+    return;
+  }
+  
   if (!isUrlAllowed(target)) {
     debugLog('navigate: blocked by whitelist', { target });
     showBlockedWithAdd(target);

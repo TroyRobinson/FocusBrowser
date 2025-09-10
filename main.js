@@ -1,15 +1,4 @@
-let electron;
-try {
-  electron = require('node:electron');
-} catch {
-  electron = require('electron');
-}
-const { app, BrowserWindow, Menu, session, ipcMain } = electron;
-// Fallback safety if destructuring fails
-if (!app || !BrowserWindow) {
-  // eslint-disable-next-line no-console
-  console.error('Electron module keys:', Object.keys(electron || {}));
-}
+const { app, BrowserWindow, Menu, session, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 let ElectronBlocker;
@@ -22,6 +11,7 @@ try {
 let mainWindow = null;
 let blocker = null;
 let adblockEnabled = true;
+let devToolsEnabled = false;
 const managedSessions = new Set();
 
 function enableBlockingIn(sess) {
@@ -50,12 +40,12 @@ function createWindow() {
     minHeight: 400,
     show: false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      devTools: false,
-      webviewTag: true
+    preload: path.join(__dirname, 'preload.js'),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+    devTools: devToolsEnabled,
+    webviewTag: true
     }
   });
 
@@ -70,6 +60,16 @@ function createWindow() {
   mainWindow.webContents.on('before-input-event', (event, input) => {
     try {
       const key = input.key;
+      // F12: toggle devtools (no modifier)
+      if (key === 'F12' && devToolsEnabled) {
+        event.preventDefault();
+        if (mainWindow?.webContents?.isDevToolsOpened()) {
+          mainWindow.webContents.closeDevTools();
+        } else {
+          mainWindow.webContents.openDevTools();
+        }
+        return;
+      }
       // Esc: stop loading (no modifier)
       if (key === 'Escape') {
         // Do not prevent default to avoid interfering with page ESC usage
@@ -161,6 +161,13 @@ app.whenReady().then(() => {
       for (const s of sessions) disableBlockingIn(s);
     }
     return { enabled: adblockEnabled };
+  });
+
+  // IPC to toggle devtools
+  ipcMain.handle('devtools:getState', async () => ({ enabled: !!devToolsEnabled }));
+  ipcMain.handle('devtools:setEnabled', async (_e, enabled) => {
+    devToolsEnabled = !!enabled;
+    return { enabled: devToolsEnabled };
   });
 
   // Persistent storage API that survives dev/packaged switches

@@ -65,25 +65,65 @@
             <span id="delay-countdown" class="delay-countdown hidden" aria-live="polite"></span>
           </div>
         </div>
-        <div class="settings-section">
-          <div class="settings-subtitle-row">
-            <h2 class="settings-subtitle">Allowed Domains</h2>
-            <button id="sort-toggle" class="sort-toggle-btn" type="button" aria-pressed="true" title="Toggle sort mode">
-              <svg class="sort-icon" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M8 4l-3 3h2v10H5l3 3 3-3H9V7h2L8 4zm8 0l-3 3h2v10h-2l3 3 3-3h-2V7h2l-3-3z" fill="currentColor"/>
-              </svg>
-              <span class="sort-text">recent</span>
-            </button>
+        
+        <!-- Settings Tabs -->
+        <div class="settings-tabs">
+          <button id="whitelist-tab" class="tab-button active" type="button">Whitelist</button>
+          <button id="llm-tab" class="tab-button" type="button">LLM</button>
+        </div>
+
+        <!-- Whitelist Tab Content -->
+        <div id="whitelist-content" class="tab-content active">
+          <div class="settings-section">
+            <div class="settings-subtitle-row">
+              <h2 class="settings-subtitle">Allowed Domains</h2>
+              <button id="sort-toggle" class="sort-toggle-btn" type="button" aria-pressed="true" title="Toggle sort mode">
+                <svg class="sort-icon" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M8 4l-3 3h2v10H5l3 3 3-3H9V7h2L8 4zm8 0l-3 3h2v10h-2l3 3 3-3h-2V7h2l-3-3z" fill="currentColor"/>
+                </svg>
+                <span class="sort-text">recent</span>
+              </button>
+            </div>
+            <p class="settings-help">
+              Add allowed domains to whitelist.
+              Matching includes subdomains and sub-URLs by default.
+            </p>
+            <form id="add-domain-form" class="add-domain" autocomplete="off">
+              <textarea id="domain-input" class="address-input" placeholder="example.com or paste multiple (space, comma, or line separated)" aria-label="Add domains" rows="3" wrap="soft"></textarea>
+              <button id="add-domain-button" class="go-button" type="submit">Add</button>
+            </form>
+            <ul id="domain-list" class="domain-list" aria-label="Whitelisted domains"></ul>
           </div>
-          <p class="settings-help">
-            Add allowed domains to whitelist.
-            Matching includes subdomains and sub-URLs by default.
-          </p>
-          <form id="add-domain-form" class="add-domain" autocomplete="off">
-            <textarea id="domain-input" class="address-input" placeholder="example.com or paste multiple (space, comma, or line separated)" aria-label="Add domains" rows="3" wrap="soft"></textarea>
-            <button id="add-domain-button" class="go-button" type="submit">Add</button>
-          </form>
-          <ul id="domain-list" class="domain-list" aria-label="Whitelisted domains"></ul>
+        </div>
+
+        <!-- LLM Tab Content -->
+        <div id="llm-content" class="tab-content">
+          <div class="settings-section">
+            <h2 class="settings-subtitle">AI Chat Configuration</h2>
+            <p class="settings-help">
+              Configure AI chat functionality. Use spaces after the first word in the address bar to trigger AI queries (e.g., "vacations in Japan").
+            </p>
+            
+            <div class="llm-setting-group">
+              <label for="llm-api-key" class="llm-label">OpenRouter API Key</label>
+              <input id="llm-api-key" class="llm-input" type="password" placeholder="Enter your OpenRouter API key" />
+              <small class="llm-help">Get your API key from <a href="https://openrouter.ai/keys" target="_blank">OpenRouter</a></small>
+            </div>
+            
+            <div class="llm-setting-group">
+              <label for="llm-model" class="llm-label">Model</label>
+              <input id="llm-model" class="llm-input" type="text" placeholder="openai/gpt-3.5-turbo" />
+              <small class="llm-help">Model identifier from OpenRouter (e.g., openai/gpt-4, anthropic/claude-3-haiku)</small>
+            </div>
+            
+            <div class="llm-setting-group">
+              <label for="llm-system-prompt" class="llm-label">System Prompt</label>
+              <textarea id="llm-system-prompt" class="llm-textarea" rows="4" placeholder="You are a helpful AI assistant. Provide clear, concise answers."></textarea>
+              <small class="llm-help">Instructions for the AI model</small>
+            </div>
+            
+            <button id="llm-save-button" class="save-button" type="button">Save LLM Settings</button>
+          </div>
         </div>
       </section>
     </main>

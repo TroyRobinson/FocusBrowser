@@ -595,3 +595,106 @@ webview#webview {
   padding: 6px 10px;
   cursor: pointer;
 }
+
+/* Settings Tabs */
+.settings-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--input-border);
+  margin-bottom: 20px;
+  gap: 0;
+}
+
+.tab-button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 12px 20px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.tab-button:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tab-button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tab-content {
+  display: none;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+/* LLM Settings */
+.llm-setting-group {
+  margin-bottom: 24px;
+}
+
+.llm-label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--fg);
+}
+
+.llm-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--fg);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.llm-input:focus {
+  border-color: var(--accent);
+}
+
+.llm-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--fg);
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+  min-height: 80px;
+  transition: border-color 0.2s ease;
+}
+
+.llm-textarea:focus {
+  border-color: var(--accent);
+}
+
+.llm-help {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.llm-help a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.llm-help a:hover {
+  text-decoration: underline;
+}
