@@ -39,4 +39,29 @@ if (contextBridge && ipcRenderer) {
       } catch {}
     }
   });
+
+  // Reliable storage API that persists across dev/packaged versions
+  contextBridge.exposeInMainWorld('focusStorage', {
+    get: async (key) => {
+      try {
+        return await ipcRenderer.invoke('storage:get', key);
+      } catch {
+        return null;
+      }
+    },
+    set: async (key, value) => {
+      try {
+        return await ipcRenderer.invoke('storage:set', key, value);
+      } catch {
+        return false;
+      }
+    },
+    remove: async (key) => {
+      try {
+        return await ipcRenderer.invoke('storage:remove', key);
+      } catch {
+        return false;
+      }
+    }
+  });
 }

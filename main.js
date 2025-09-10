@@ -11,6 +11,7 @@ if (!app || !BrowserWindow) {
   console.error('Electron module keys:', Object.keys(electron || {}));
 }
 const path = require('node:path');
+const fs = require('node:fs');
 let ElectronBlocker;
 let fetch;
 try {
@@ -160,6 +161,59 @@ app.whenReady().then(() => {
       for (const s of sessions) disableBlockingIn(s);
     }
     return { enabled: adblockEnabled };
+  });
+
+  // Persistent storage API that survives dev/packaged switches
+  const userDataPath = app.getPath('userData');
+  const dataFile = path.join(userDataPath, 'focus-data.json');
+
+  function safeReadData() {
+    try {
+      if (!fs.existsSync(dataFile)) return {};
+      const raw = fs.readFileSync(dataFile, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return {};
+      return parsed;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('Failed to read data, starting fresh:', err.message);
+      return {};
+    }
+  }
+
+  function safeWriteData(data) {
+    try {
+      if (!fs.existsSync(userDataPath)) {
+        fs.mkdirSync(userDataPath, { recursive: true });
+      }
+      const backup = dataFile + '.backup';
+      if (fs.existsSync(dataFile)) {
+        fs.copyFileSync(dataFile, backup);
+      }
+      fs.writeFileSync(dataFile, JSON.stringify(data, null, 2), 'utf8');
+      return true;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to save data:', err.message);
+      return false;
+    }
+  }
+
+  ipcMain.handle('storage:get', async (_e, key) => {
+    const data = safeReadData();
+    return data[key] ?? null;
+  });
+
+  ipcMain.handle('storage:set', async (_e, key, value) => {
+    const data = safeReadData();
+    data[key] = value;
+    return safeWriteData(data);
+  });
+
+  ipcMain.handle('storage:remove', async (_e, key) => {
+    const data = safeReadData();
+    delete data[key];
+    return safeWriteData(data);
   });
 
   createWindow();

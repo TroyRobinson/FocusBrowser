@@ -86,7 +86,7 @@ function getLastAllowed(el) { return el?._lastAllowedURL || 'about:blank'; }
 function setLastAllowed(el, url) { if (el) el._lastAllowedURL = url || 'about:blank'; }
 setLastAllowed(primaryWebView, 'about:blank');
 
-// Whitelist storage
+// Storage keys
 const WL_KEY = 'whitelist';
 const DELAY_KEY = 'whitelist_delay_minutes';
 const DELAY_PENDING_MIN_KEY = 'whitelist_delay_pending_minutes';
@@ -95,7 +95,68 @@ const SORT_MODE_KEY = 'wl_sort_mode_v1'; // 'recent' | 'abc'
 
 // Active sessions persistence
 const ACTIVE_SESSIONS_KEY = 'active_sessions_v1';
- const VISIBLE_VIEW_KEY = 'visible_view_v1';
+const VISIBLE_VIEW_KEY = 'visible_view_v1';
+
+// Cached sort mode for synchronous access
+let cachedSortMode = 'recent';
+
+// Load and cache sort mode on startup
+(async function initSortMode() {
+  try {
+    const stored = await safeGetItem(SORT_MODE_KEY);
+    cachedSortMode = (stored === 'abc') ? 'abc' : 'recent';
+  } catch {}
+})();
+
+// Reliable storage wrapper with localStorage fallback
+async function safeGetItem(key) {
+  try {
+    if (window.focusStorage) {
+      const value = await window.focusStorage.get(key);
+      if (value !== null) return value;
+    }
+    // Fallback to localStorage and migrate
+    const fallback = localStorage.getItem(key);
+    if (fallback && window.focusStorage) {
+      await window.focusStorage.set(key, fallback);
+    }
+    return fallback;
+  } catch {
+    return localStorage.getItem(key);
+  }
+}
+
+async function safeSetItem(key, value) {
+  try {
+    // Try reliable storage first
+    if (window.focusStorage) {
+      const success = await window.focusStorage.set(key, value);
+      if (success) {
+        // Also update localStorage for immediate synchronous access
+        localStorage.setItem(key, value);
+        return true;
+      }
+    }
+    localStorage.setItem(key, value);
+    return true;
+  } catch {
+    localStorage.setItem(key, value);
+    return false;
+  }
+}
+
+async function safeRemoveItem(key) {
+  try {
+    if (window.focusStorage) {
+      await window.focusStorage.remove(key);
+    }
+    localStorage.removeItem(key);
+    return true;
+  } catch {
+    localStorage.removeItem(key);
+    return false;
+  }
+}
 
 function loadWhitelist() {
   try {
@@ -125,7 +186,7 @@ function loadWhitelist() {
   }
 }
 
-function saveWhitelist(list) {
+async function saveWhitelist(list) {
   const map = new Map();
   for (const it of list) {
     if (!it || !it.domain) continue;
@@ -135,7 +196,8 @@ function saveWhitelist(list) {
     const ex = map.get(domain);
     if (!ex || norm.activateAt < ex.activateAt) map.set(domain, norm);
   }
-  localStorage.setItem(WL_KEY, JSON.stringify(Array.from(map.values())));
+  const data = JSON.stringify(Array.from(map.values()));
+  await safeSetItem(WL_KEY, data);
 }
 
 function sanitizeDelay(n) {
@@ -157,14 +219,14 @@ function getPendingDelay() {
   }
 }
 
-function clearPendingDelay() {
-  localStorage.removeItem(DELAY_PENDING_MIN_KEY);
-  localStorage.removeItem(DELAY_PENDING_AT_KEY);
+async function clearPendingDelay() {
+  await safeRemoveItem(DELAY_PENDING_MIN_KEY);
+  await safeRemoveItem(DELAY_PENDING_AT_KEY);
 }
 
-function setEffectiveDelayMinutes(n) {
+async function setEffectiveDelayMinutes(n) {
   const v = sanitizeDelay(n);
-  localStorage.setItem(DELAY_KEY, String(v));
+  await safeSetItem(DELAY_KEY, String(v));
 }
 
 function promotePendingIfDue() {
@@ -193,18 +255,18 @@ function getDelayMinutes() {
   return sanitizeDelay(raw);
 }
 
-function schedulePendingDelay(newMinutes) {
+async function schedulePendingDelay(newMinutes) {
   const effective = getDelayMinutes();
   const next = sanitizeDelay(newMinutes);
   if (effective === 0) {
     // Immediate effect, no countdown
-    setEffectiveDelayMinutes(next);
-    clearPendingDelay();
+    await setEffectiveDelayMinutes(next);
+    await clearPendingDelay();
     return { immediate: true };
   }
   const activateAt = Date.now() + effective * 60 * 1000;
-  localStorage.setItem(DELAY_PENDING_MIN_KEY, String(next));
-  localStorage.setItem(DELAY_PENDING_AT_KEY, String(activateAt));
+  await safeSetItem(DELAY_PENDING_MIN_KEY, String(next));
+  await safeSetItem(DELAY_PENDING_AT_KEY, String(activateAt));
   return { immediate: false, activateAt };
 }
 
@@ -316,7 +378,7 @@ function showBlockedWithAdd(urlStr) {
       showActionBanner(
         `Blocked: ${host} is not in whitelist.`,
         `Add ${root}`,
-        () => addDomainWithDelay(root),
+        () => { addDomainWithDelay(root); },
         'error',
         8000
       );
@@ -444,7 +506,7 @@ function renderWhitelist() {
 
   // Recency: higher index in list means more recently added (we persist in insertion order)
   const recencyIndex = new Map(list.map((it, i) => [it.domain, i]));
-  const sortMode = (localStorage.getItem(SORT_MODE_KEY) || 'recent') === 'abc' ? 'abc' : 'recent';
+  const sortMode = cachedSortMode;
 
   // Build entries with optional fuzzy scoring
   let entries = [];
@@ -507,10 +569,10 @@ function renderWhitelist() {
       const btn = document.createElement('button');
       btn.className = 'remove';
       btn.textContent = 'Remove';
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const next = loadWhitelist().filter((d) => d.domain !== item.domain);
-        saveWhitelist(next);
+        await saveWhitelist(next);
         wlSelectedDomains.delete(item.domain);
         renderWhitelist();
       });
@@ -543,7 +605,7 @@ function renderWhitelist() {
 }
 
 if (addDomainForm) {
-  addDomainForm.addEventListener('submit', (e) => {
+  addDomainForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const raw = String(domainInput.value || '');
     const tokens = raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
@@ -572,7 +634,7 @@ if (addDomainForm) {
       const activateAt = delayMin > 0 ? now + delayMin * 60 * 1000 : 0;
       wl.push({ domain: host, activateAt });
     }
-    saveWhitelist(wl);
+    await saveWhitelist(wl);
     renderWhitelist();
     if (delayMin > 0) {
       showBanner(`Added ${toAdd.length} domain(s). Activates in ${delayMin} min`);
@@ -620,7 +682,7 @@ settingsBtn?.addEventListener('click', () => {
     // Initialize sort toggle from storage
     try {
       if (sortToggle) {
-        const isRecent = (localStorage.getItem(SORT_MODE_KEY) || 'recent') === 'recent';
+        const isRecent = cachedSortMode === 'recent';
         sortToggle.setAttribute('aria-pressed', String(isRecent));
         const t = sortToggle.querySelector('.sort-text');
         if (t) t.textContent = isRecent ? 'recent' : 'abc';
@@ -640,7 +702,7 @@ settingsBtn?.addEventListener('click', () => {
 
 // Backspace/Delete removes selected whitelist items while settings are visible
 (function setupDeleteShortcut() {
-  function handler(e) {
+  async function handler(e) {
     if (!(e.key === 'Backspace' || e.key === 'Delete')) return;
     // Only when settings view is visible
     if (!settingsView || settingsView.classList.contains('hidden')) return;
@@ -650,7 +712,7 @@ settingsBtn?.addEventListener('click', () => {
     e.preventDefault();
     const toDelete = new Set(wlSelectedDomains);
     const next = loadWhitelist().filter((d) => !toDelete.has(d.domain));
-    saveWhitelist(next);
+    await saveWhitelist(next);
     clearWhitelistSelection();
     renderWhitelist();
   }
@@ -693,7 +755,8 @@ if (sortToggle) {
       e.preventDefault();
       const isRecent = sortToggle.getAttribute('aria-pressed') === 'true';
       const nextMode = isRecent ? 'abc' : 'recent';
-      localStorage.setItem(SORT_MODE_KEY, nextMode);
+      cachedSortMode = nextMode; // Update cache immediately
+      safeSetItem(SORT_MODE_KEY, nextMode).catch(() => {});
       sortToggle.setAttribute('aria-pressed', String(nextMode === 'recent'));
       const t = sortToggle.querySelector('.sort-text');
       if (t) t.textContent = nextMode;
@@ -771,12 +834,12 @@ delayInput?.addEventListener('input', () => {
   updateSaveButtonState();
 });
 
-delaySaveBtn?.addEventListener('click', () => {
+delaySaveBtn?.addEventListener('click', async () => {
   if (!delayInput) return;
   const pending = getPendingDelay();
   if (pending && delayCancelHover) {
     // Cancel pending change
-    clearPendingDelay();
+    await clearPendingDelay();
     showBanner('Pending delay change canceled');
     delayCancelHover = false;
     delayInputDirty = false;
@@ -787,7 +850,7 @@ delaySaveBtn?.addEventListener('click', () => {
   }
   const valStr = String(delayInput.value ?? '').trim();
   const next = sanitizeDelay(valStr);
-  const result = schedulePendingDelay(next);
+  const result = await schedulePendingDelay(next);
   if (result.immediate) {
     showBanner('Delay updated');
   } else {
@@ -806,7 +869,7 @@ delaySaveBtn?.addEventListener('mouseleave', () => {
   if (delayCancelHover) { delayCancelHover = false; renderDelayControls(); }
 });
 
-function addDomainWithDelay(host) {
+async function addDomainWithDelay(host) {
   const wl = loadWhitelist();
   if (wl.some((it) => it.domain === host)) {
     showBanner(`${host} already whitelisted`);
@@ -815,7 +878,7 @@ function addDomainWithDelay(host) {
   const delayMin = getDelayMinutes();
   const activateAt = delayMin > 0 ? Date.now() + delayMin * 60 * 1000 : 0;
   wl.push({ domain: host, activateAt });
-  saveWhitelist(wl);
+  await saveWhitelist(wl);
   renderWhitelist();
   if (delayMin > 0) {
     showBanner(`Added ${host}. Activates in ${delayMin} min`);
@@ -831,7 +894,7 @@ let activeSeq = 1;
 let activeMru = [];
 
 // Persistence helpers for active sessions
-function persistActiveSessions() {
+async function persistActiveSessions() {
   try {
     const arr = [];
     for (const [id, rec] of activeLocations) {
@@ -840,13 +903,13 @@ function persistActiveSessions() {
       if (!url) continue;
       arr.push({ id: String(id), url, title });
     }
-    localStorage.setItem(ACTIVE_SESSIONS_KEY, JSON.stringify(arr));
+    await safeSetItem(ACTIVE_SESSIONS_KEY, JSON.stringify(arr));
   } catch {}
 }
 
-function loadActiveSessions() {
+async function loadActiveSessions() {
   try {
-    const raw = localStorage.getItem(ACTIVE_SESSIONS_KEY);
+    const raw = await safeGetItem(ACTIVE_SESSIONS_KEY);
     if (!raw) return [];
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
@@ -865,7 +928,7 @@ function loadActiveSessions() {
   }
 }
 
-function persistVisibleViewFor(el) {
+async function persistVisibleViewFor(el) {
   try {
     let data = { kind: 'primary' };
     // Primary is only when this is the ephemeral primary with id 'webview'
@@ -873,13 +936,13 @@ function persistVisibleViewFor(el) {
       const id = findActiveIdByWebView(el);
       if (id) data = { kind: 'active', id: String(id) };
     }
-    localStorage.setItem(VISIBLE_VIEW_KEY, JSON.stringify(data));
+    await safeSetItem(VISIBLE_VIEW_KEY, JSON.stringify(data));
   } catch {}
 }
 
-function loadVisibleView() {
+async function loadVisibleView() {
   try {
-    const raw = localStorage.getItem(VISIBLE_VIEW_KEY);
+    const raw = await safeGetItem(VISIBLE_VIEW_KEY);
     if (!raw) return null;
     const obj = JSON.parse(raw);
     if (!obj || typeof obj !== 'object') return null;
@@ -905,12 +968,12 @@ function findActiveIdByWebView(el) {
   return null;
 }
 
-function restoreActiveSessionsFromStorage() {
+async function restoreActiveSessionsFromStorage() {
   try {
-    const list = loadActiveSessions();
+    const list = await loadActiveSessions();
     if (!Array.isArray(list) || list.length === 0) {
       // Still initialize visible view key to current primary
-      persistVisibleViewFor(getVisibleWebView());
+      await persistVisibleViewFor(getVisibleWebView());
       return;
     }
     let maxIdNum = 0;
@@ -933,7 +996,7 @@ function restoreActiveSessionsFromStorage() {
     activeSeq = Math.max(activeSeq, maxIdNum + 1);
 
     // Restore last visible
-    const vv = loadVisibleView();
+    const vv = await loadVisibleView();
     if (vv && vv.kind === 'active' && activeLocations.has(String(vv.id))) {
       switchToActive(String(vv.id));
     } else if (vv && vv.kind === 'primary') {
@@ -978,7 +1041,7 @@ function wireWebView(el) {
         const rec = activeLocations.get(aid);
         rec.url = e.url || rec.url;
         try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
-        persistActiveSessions();
+        persistActiveSessions().catch(() => {});
       }
     } catch {}
     updateNavButtons();
@@ -1001,7 +1064,7 @@ function wireWebView(el) {
         const rec = activeLocations.get(aid);
         rec.url = e.url || rec.url;
         try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
-        persistActiveSessions();
+        persistActiveSessions().catch(() => {});
       }
     } catch {}
     updateNavButtons();
@@ -1052,7 +1115,7 @@ function wireWebView(el) {
           const rec = activeLocations.get(aid);
           rec.url = current || rec.url;
           try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
-          persistActiveSessions();
+          persistActiveSessions().catch(() => {});
         }
       } catch {}
     } catch {}
@@ -1069,7 +1132,7 @@ function wireWebView(el) {
       if (aid && activeLocations.has(aid)) {
         const rec = activeLocations.get(aid);
         try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
-        persistActiveSessions();
+        persistActiveSessions().catch(() => {});
       }
     } catch {}
   });
@@ -1161,7 +1224,7 @@ function switchToWebView(el) {
     if (url) input.value = url;
   } catch {}
   // Persist which view is visible
-  try { persistVisibleViewFor(el); } catch {}
+  persistVisibleViewFor(el).catch(() => {});
 }
 
 function parkCurrentAsActive() {
@@ -1187,11 +1250,11 @@ function parkCurrentAsActive() {
     try {
       const rec = activeLocations.get(id);
       if (rec) rec.title = el.getTitle?.() || '';
-      persistActiveSessions();
+      persistActiveSessions().catch(() => {});
     } catch {}
   }, 0);
   // Persist after creation
-  try { persistActiveSessions(); } catch {}
+  persistActiveSessions().catch(() => {});
   return id;
 }
 
@@ -1218,7 +1281,7 @@ function closeActiveById(id) {
       // If we removed the element previously serving as primary, clear ref so a new one is created on demand
       primaryWebView = null;
     }
-    persistActiveSessions();
+    persistActiveSessions().catch(() => {});
     if (isCurrent) {
       // Determine next view
       let nextId = activeMru.length > 0 ? activeMru[0] : null;
@@ -1671,7 +1734,7 @@ function updateCloseButtonUI() {
 // --- Events wiring ---
 wireWebView(primaryWebView);
 // Restore any previously persisted active sessions and last visible view
-try { restoreActiveSessionsFromStorage(); } catch {}
+restoreActiveSessionsFromStorage().catch(() => {});
 
 navBackBtn?.addEventListener('click', (e) => {
   e.preventDefault();
