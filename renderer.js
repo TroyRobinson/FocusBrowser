@@ -15,6 +15,16 @@ function normalizeToURL(input) {
   }
 }
 
+function updateAddressBarWithURL(url) {
+  // Show empty space for about:blank instead of the actual URL
+  if (!input) return;
+  if (url === 'about:blank') {
+    input.value = '';
+  } else {
+    input.value = url || input.value;
+  }
+}
+
 const form = document.getElementById('address-form');
 const input = document.getElementById('address-input');
 const settingsBtn = document.getElementById('settings-button');
@@ -327,21 +337,29 @@ function clearBanner() {
   bannerTimeout = null;
 }
 
-function showBanner(message, kind = '', durationMs = 2600) {
+function showBanner(message, kind = '', durationMs = 900) {
   if (!banner) return;
   banner.classList.remove('hidden', 'error');
   if (kind) banner.classList.add(kind);
   banner.textContent = '';
+  
   const span = document.createElement('span');
   span.textContent = message;
   banner.appendChild(span);
+  
+  const closeBtn = document.createElement('span');
+  closeBtn.className = 'banner-close';
+  closeBtn.innerHTML = '×';
+  closeBtn.onclick = clearBanner;
+  banner.appendChild(closeBtn);
+  
   if (bannerTimeout) clearTimeout(bannerTimeout);
   bannerTimeout = setTimeout(() => {
     banner.classList.add('hidden');
   }, durationMs);
 }
 
-function showActionBanner(message, actionLabel, onAction, kind = '', durationMs = 6000) {
+function showActionBanner(message, actionLabel, onAction, kind = '', durationMs = 1400) {
   if (!banner) return;
   banner.classList.remove('hidden', 'error');
   if (kind) banner.classList.add(kind);
@@ -355,8 +373,15 @@ function showActionBanner(message, actionLabel, onAction, kind = '', durationMs 
   btn.addEventListener('click', () => {
     try { onAction?.(); } finally { clearBanner(); }
   });
+  
+  const closeBtn = document.createElement('span');
+  closeBtn.className = 'banner-close';
+  closeBtn.innerHTML = '×';
+  closeBtn.onclick = clearBanner;
+  
   banner.appendChild(span);
   banner.appendChild(btn);
+  banner.appendChild(closeBtn);
   if (bannerTimeout) clearTimeout(bannerTimeout);
   bannerTimeout = setTimeout(() => {
     banner.classList.add('hidden');
@@ -405,7 +430,7 @@ function setSettingsVisible(visible) {
     getVisibleWebView()?.classList.remove('hidden');
     try { settingsBtn?.classList.remove('active'); } catch {}
     // Restore address bar to current view URL
-    try { const v = getVisibleWebView(); const url = v?.getURL?.() || ''; if (url) input.value = url; } catch {}
+    try { const v = getVisibleWebView(); const url = v?.getURL?.() || ''; updateAddressBarWithURL(url); } catch {}
     try { updateNavButtons(); } catch {}
   }
 }
@@ -742,6 +767,16 @@ settingsBtn?.addEventListener('click', () => {
   document.addEventListener('keydown', handler, true);
 })();
 
+// ESC key closes banners
+(function setupBannerEscClose() {
+  function handler(e) {
+    if (e.key === 'Escape' && banner && !banner.classList.contains('hidden')) {
+      clearBanner();
+    }
+  }
+  document.addEventListener('keydown', handler, true);
+})();
+
 backBtn?.addEventListener('click', () => {
   setSettingsVisible(false);
   stopCountdown();
@@ -1029,7 +1064,7 @@ function wireWebView(el) {
   el.addEventListener('did-navigate', (e) => {
     debugLog('did-navigate', { id: viewId(el), url: e.url });
     if (el === getVisibleWebView()) {
-      input.value = e.url || input.value;
+      updateAddressBarWithURL(e.url);
     }
     if (e.url && isUrlAllowed(e.url)) {
       setLastAllowed(el, e.url);
@@ -1052,7 +1087,7 @@ function wireWebView(el) {
   el.addEventListener('did-navigate-in-page', (e) => {
     debugLog('did-navigate-in-page', { id: viewId(el), url: e.url });
     if (el === getVisibleWebView()) {
-      input.value = e.url || input.value;
+      updateAddressBarWithURL(e.url);
     }
     if (e.url && isUrlAllowed(e.url)) {
       setLastAllowed(el, e.url);
@@ -1221,7 +1256,7 @@ function switchToWebView(el) {
   updateCloseButtonUI();
   try {
     const url = el.getURL?.() || '';
-    if (url) input.value = url;
+    updateAddressBarWithURL(url);
   } catch {}
   // Persist which view is visible
   persistVisibleViewFor(el).catch(() => {});
@@ -1673,10 +1708,13 @@ function finishLoadingBar() {
 
 function updateNavButtons() {
   try {
-    // While Settings is visible, disable nav arrows
+    // While Settings is visible, disable all nav buttons except address bar and settings
     if (settingsView && !settingsView.classList.contains('hidden')) {
       if (navBackBtn) navBackBtn.disabled = true;
       if (navForwardBtn) navForwardBtn.disabled = true;
+      if (navRefreshBtn) navRefreshBtn.disabled = true;
+      if (closeActiveBtn) closeActiveBtn.disabled = true;
+      if (extensionsBtn) extensionsBtn.disabled = true;
       return;
     }
     const view = getVisibleWebView();
@@ -1684,6 +1722,9 @@ function updateNavButtons() {
     const canFwd = !!view?.canGoForward?.();
     if (navBackBtn) navBackBtn.disabled = !canBack;
     if (navForwardBtn) navForwardBtn.disabled = !canFwd;
+    if (navRefreshBtn) navRefreshBtn.disabled = false;
+    if (closeActiveBtn) closeActiveBtn.disabled = false;
+    if (extensionsBtn) extensionsBtn.disabled = false;
   } catch {
     if (navBackBtn) navBackBtn.disabled = true;
     if (navForwardBtn) navForwardBtn.disabled = true;
@@ -1713,6 +1754,9 @@ function updateCloseButtonUI() {
   try {
     const view = getVisibleWebView();
     const aid = findActiveIdByWebView(view);
+    const currentURL = view?.getURL?.() || '';
+    const isBlankPage = currentURL === 'about:blank' || currentURL === '';
+    
     if (closeActiveBtn) {
       // Always show; toggle label and a11y based on active state
       closeActiveBtn.classList.remove('hidden');
@@ -1721,11 +1765,13 @@ function updateCloseButtonUI() {
         closeActiveBtn.classList.remove('danger');
         closeActiveBtn.setAttribute('aria-label', 'Close active session');
         closeActiveBtn.setAttribute('title', 'Close active session');
+        closeActiveBtn.disabled = false;
       } else {
         closeActiveBtn.textContent = '+';
         closeActiveBtn.classList.remove('danger');
         closeActiveBtn.setAttribute('aria-label', 'Add as active session');
         closeActiveBtn.setAttribute('title', 'Add as active session');
+        closeActiveBtn.disabled = isBlankPage;
       }
     }
   } catch {}
@@ -1779,6 +1825,7 @@ closeActiveBtn?.addEventListener('click', (e) => {
 // Input interactions
 input.addEventListener('input', () => { renderSuggestions(); });
 input.addEventListener('focus', () => { renderSuggestions(); });
+input.addEventListener('click', () => { hideExtensionsPopover(); });
 
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
@@ -1843,14 +1890,11 @@ document.addEventListener('click', (e) => {
   hideSuggestions();
 });
 
-// Hide open UI (suggestions, extensions) when interacting with a webview
-document.addEventListener('pointerdown', (e) => {
-  const t = e.target;
-  if (t && t.tagName && String(t.tagName).toLowerCase() === 'webview') {
-    hideSuggestions();
-    hideExtensionsPopover();
-  }
-}, true);
+// Hide dropdowns when window loses focus (e.g., clicking webview)
+window.addEventListener('blur', () => {
+  hideSuggestions();
+  hideExtensionsPopover();
+});
 
 form.addEventListener('submit', (e) => {
   // Prevent default; navigation is handled by keydown (Enter) or Go button click
@@ -1861,6 +1905,7 @@ form.addEventListener('submit', (e) => {
 // --- Extensions (uBlock) UI ---
 function hideExtensionsPopover() {
   if (extensionsPopover) extensionsPopover.classList.add('hidden');
+  extensionsBtn?.classList.remove('active');
 }
 
 function positionExtensionsPopover() {
@@ -1899,8 +1944,10 @@ function toggleExtensionsPopover() {
   if (isHidden) {
     extensionsPopover.classList.remove('hidden');
     positionExtensionsPopover();
+    extensionsBtn?.classList.add('active');
   } else {
     extensionsPopover.classList.add('hidden');
+    extensionsBtn?.classList.remove('active');
   }
 }
 
@@ -1932,6 +1979,7 @@ document.addEventListener('click', (e) => {
   if (!extensionsPopover || !extensionsBtn) return;
   const target = e.target;
   if (!(target instanceof Node)) return;
+  // Don't close if clicking on the popover itself or the extensions button
   if (extensionsPopover.contains(target) || extensionsBtn.contains(target)) return;
   hideExtensionsPopover();
 });
@@ -1941,6 +1989,25 @@ refreshUboToggle();
 updateNavButtons();
 updateRefreshButtonUI();
 updateCloseButtonUI();
+
+// Focus on address bar when browser opens
+// Use delayed focus to ensure active sessions are loaded and suggestions can appear
+function ensureAddressBarFocused() {
+  try {
+    if (input) {
+      input.focus();
+      // Trigger suggestions to appear by calling renderSuggestions
+      renderSuggestions();
+    }
+  } catch {}
+}
+
+// Initial focus
+ensureAddressBarFocused();
+
+// Retry focus a couple times with delays to ensure suggestions appear
+setTimeout(ensureAddressBarFocused, 100);
+setTimeout(ensureAddressBarFocused, 300);
 
 
 // Keyboard shortcuts from main process

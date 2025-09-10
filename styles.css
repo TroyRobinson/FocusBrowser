@@ -7,6 +7,34 @@
   --input-border: #252a33;
 }
 
+/* Sleek dark scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3f4a #1a1f28;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #1a1f28;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #3a3f4a;
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #4a5061;
+}
+
+*::-webkit-scrollbar-corner {
+  background: #1a1f28;
+}
+
 html, body {
   height: 100%;
 }
@@ -45,6 +73,10 @@ body {
   background: var(--input-bg);
   color: var(--fg);
   outline: none;
+}
+
+.address-input:focus {
+  border-color: var(--accent);
 }
 
 /* Multiline behavior for the settings domains input */
@@ -333,6 +365,20 @@ webview#webview {
   cursor: pointer;
 }
 
+.banner-close {
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--fg);
+  margin-left: auto;
+  padding: 0 2px;
+  user-select: none;
+}
+
+.banner-close:hover {
+  color: #ccc;
+}
+
 .settings {
   position: absolute;
   inset: 0;
@@ -409,8 +455,15 @@ webview#webview {
   font-variant-numeric: tabular-nums;
 }
 
+.settings-subtitle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
 .settings-subtitle {
-  margin-top: 0;
+  margin: 0;
 }
 
 .settings-help {
@@ -450,8 +503,8 @@ webview#webview {
   gap: 6px;
 }
 .sort-toggle-btn[aria-pressed="true"] {
-  /* pressed = recent (subtle fill, no border highlight) */
-  background: rgba(79, 124, 255, 0.12);
+  /* pressed = recent (no background fill, matches abc state) */
+  background: transparent;
 }
 .sort-toggle-btn:hover {
   border-color: var(--accent); /* border highlight only on hover */
