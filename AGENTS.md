@@ -1,10 +1,11 @@
 # AGENTS.md - Focus Browser
 
-Do NOT try to start the app as it causes errors currently when being started by AI agents.
-<!-- ## Build/Test/Run Commands
-- **Start app**: `npm start` (runs electron)
+
+## Build/Test/Run Commands
+**Instructions:** If you're testing your changes, just try to start the app, don't try to reinstall. If you get errors starting the app, don't worry about it and just create a simple html test to test your changes.
+- **Start app**: `npm start -- --enable-logging=stderr` (runs electron with logging)
 - **Install dependencies**: `npm install` (use `HOME=$(pwd)/.home npm install` on macOS/Linux to avoid global pollution)
-- **No tests configured**: package.json shows "Error: no test specified" -->
+- **No tests configured**: package.json shows "Error: no test specified"
 
 ## Architecture Overview
 - **Electron app** with single BrowserWindow and embedded webview for browsing

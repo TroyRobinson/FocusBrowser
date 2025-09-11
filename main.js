@@ -14,6 +14,51 @@ let adblockEnabled = true;
 let devToolsEnabled = true;
 const managedSessions = new Set();
 
+// Forward high-signal network errors from sessions to renderer DevTools
+function attachNetLogging(sess) {
+  try {
+    if (!sess || sess.__fbNetLogAttached) return;
+    sess.__fbNetLogAttached = true;
+    const filterAll = { urls: ['*://*/*'] };
+
+    // Errors like net::ERR_BLOCKED_BY_CLIENT, DNS failures, etc.
+    sess.webRequest.onErrorOccurred(filterAll, (details) => {
+      try {
+        const payload = {
+          kind: 'error',
+          webContentsId: details.webContentsId || null,
+          url: details.url || '',
+          method: details.method || 'GET',
+          resourceType: details.resourceType || '',
+          error: details.error || '',
+          fromCache: !!details.fromCache,
+          timestamp: Date.now(),
+        };
+        mainWindow?.webContents?.send?.('devlog:net', payload);
+      } catch {}
+    });
+
+    // Completed with HTTP error status codes
+    sess.webRequest.onCompleted(filterAll, (details) => {
+      try {
+        const code = Number(details.statusCode);
+        if (!Number.isFinite(code) || code < 400) return;
+        const payload = {
+          kind: 'http-error',
+          webContentsId: details.webContentsId || null,
+          url: details.url || '',
+          method: details.method || 'GET',
+          resourceType: details.resourceType || '',
+          statusCode: code,
+          fromCache: !!details.fromCache,
+          timestamp: Date.now(),
+        };
+        mainWindow?.webContents?.send?.('devlog:net', payload);
+      } catch {}
+    });
+  } catch {}
+}
+
 // Coalesce navigation events to avoid duplicates from multiple sources
 let _lastNavAction = '';
 let _lastNavAt = 0;
@@ -138,6 +183,26 @@ app.whenReady().then(() => {
     try {
       if (adblockEnabled && blocker) {
         enableBlockingIn(contents.session);
+      }
+      // Ensure network logging is attached for this session
+      attachNetLogging(contents.session);
+      // Forward page console to main DevTools as early as possible
+      if (contents.getType && contents.getType() === 'webview') {
+        try {
+          contents.on('console-message', (_event, level, message, line, sourceId) => {
+            try {
+              const payload = {
+                webContentsId: contents.id,
+                level: Number(level),
+                message: String(message || ''),
+                line: Number.isFinite(line) ? line : null,
+                sourceId: sourceId ? String(sourceId) : '',
+                timestamp: Date.now(),
+              };
+              mainWindow?.webContents?.send?.('devlog:console', payload);
+            } catch {}
+          });
+        } catch {}
       }
       // Forward shortcuts when focus is inside a webview
       if (contents.getType && contents.getType() === 'webview') {

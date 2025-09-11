@@ -120,6 +120,23 @@ function debugLog(...args) {
   } catch {}
 }
 
+// Lightweight duplicate suppression across multiple sources (renderer+main)
+const __fbConsoleDupeCache = new Map(); // sig -> ts
+function isConsoleDupe(sig, ttl = 1500) {
+  try {
+    const now = Date.now();
+    const prev = __fbConsoleDupeCache.get(sig) || 0;
+    if (now - prev < ttl) return true;
+    __fbConsoleDupeCache.set(sig, now);
+    // occasional pruning
+    if (__fbConsoleDupeCache.size > 2000) {
+      const cutoff = now - ttl * 2;
+      for (const [k, t] of __fbConsoleDupeCache) { if (t < cutoff) __fbConsoleDupeCache.delete(k); }
+    }
+    return false;
+  } catch { return false; }
+}
+
 // Decode minimal HTML entities to show clean text in the address bar
 function decodeHTMLEntities(str) {
   try {
@@ -2382,6 +2399,8 @@ function wireWebView(el) {
         const msg = String(e?.message ?? '');
         const line = Number.isFinite(e?.line) ? e.line : null;
         const source = e?.sourceId ? String(e.sourceId) : '';
+        const wcid = (() => { try { return typeof el.getWebContentsId === 'function' ? el.getWebContentsId() : null; } catch { return null; } })();
+        if (wcid != null) { if (isConsoleDupe(`${wcid}|${source}:${line}|${msg}`)) return; }
         const url = (() => {
           try { return el.getURL?.() || ''; } catch { return ''; }
         })();
@@ -4035,6 +4054,69 @@ setTimeout(ensureAddressBarFocused, 300);
 
 // Start timer to process pending deletion-rule removals
 try { startRemovalPendingTimer(); } catch {}
+
+// Network error logging: show blocked/failed requests similarly to Chrome DevTools
+try {
+  const mapWCIdToViewId = (wid) => {
+    try {
+      const views = getAllWebViews();
+      for (const v of views) {
+        try { if (typeof v.getWebContentsId === 'function' && v.getWebContentsId() === wid) return viewId(v); } catch {}
+      }
+    } catch {}
+    return '(unknown)';
+  };
+  const hostname = (u) => {
+    try { return new URL(String(u || '')).hostname || ''; } catch { return ''; }
+  };
+  window.devlog?.onNet?.((ev) => {
+    try {
+      const id = mapWCIdToViewId(ev?.webContentsId);
+      const host = hostname(ev?.url);
+      const prefix = `[net webview:${id}${host ? ` ${host}` : ''}]`;
+      if (ev?.kind === 'error') {
+        const method = ev?.method || 'GET';
+        const url = ev?.url || '';
+        const err = ev?.error || 'net::ERR_UNKNOWN';
+        const rtype = ev?.resourceType ? ` ${ev.resourceType}` : '';
+        // eslint-disable-next-line no-console
+        console.warn(`${prefix}${rtype} ${method} ${url} ${err}`);
+      } else if (ev?.kind === 'http-error') {
+        const method = ev?.method || 'GET';
+        const url = ev?.url || '';
+        const code = ev?.statusCode;
+        const rtype = ev?.resourceType ? ` ${ev.resourceType}` : '';
+        // eslint-disable-next-line no-console
+        console.warn(`${prefix}${rtype} ${method} ${url} HTTP ${code}`);
+      }
+    } catch {}
+  });
+  // Forward console messages captured in main for completeness
+  window.devlog?.onConsole?.((ev) => {
+    try {
+      const wid = ev?.webContentsId ?? null;
+      const level = Number(ev?.level);
+      const msg = String(ev?.message || '');
+      const line = Number.isFinite(ev?.line) ? ev.line : null;
+      const source = ev?.sourceId ? String(ev.sourceId) : '';
+      if (wid != null) { if (isConsoleDupe(`${wid}|${source}:${line}|${msg}`)) return; }
+      const id = mapWCIdToViewId(wid);
+      const host = (() => {
+        try {
+          const views = getAllWebViews();
+          for (const v of views) { if (typeof v.getWebContentsId === 'function' && v.getWebContentsId() === wid) { const u = v.getURL?.() || ''; try { return new URL(u).hostname; } catch { return ''; } } }
+        } catch {}
+        return '';
+      })();
+      const prefix = `[webview:${id}${host ? ` ${host}` : ''}]`;
+      const src = source || line ? `${source || ''}${line ? `:${line}` : ''}` : '';
+      const suffix = src ? ` (${src})` : '';
+      const method = (level === 2 || level === 3) ? 'error' : (level === 1 ? 'warn' : 'log');
+      // eslint-disable-next-line no-console
+      (console[method] || console.log)(`${prefix} ${msg}${suffix}`);
+    } catch {}
+  });
+} catch {}
 
 
 // Keyboard shortcuts from main process

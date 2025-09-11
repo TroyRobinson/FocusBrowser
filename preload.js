@@ -40,6 +40,34 @@ if (contextBridge && ipcRenderer) {
     }
   });
 
+  // Dev logging bridge (network and other main->renderer logs)
+  contextBridge.exposeInMainWorld('devlog', {
+    onNet: (handler) => {
+      try {
+        if (typeof handler !== 'function') return () => {};
+        const listener = (_evt, payload) => {
+          try { handler(payload); } catch {}
+        };
+        ipcRenderer.on('devlog:net', listener);
+        return () => ipcRenderer.removeListener('devlog:net', listener);
+      } catch {
+        return () => {};
+      }
+    },
+    onConsole: (handler) => {
+      try {
+        if (typeof handler !== 'function') return () => {};
+        const listener = (_evt, payload) => {
+          try { handler(payload); } catch {}
+        };
+        ipcRenderer.on('devlog:console', listener);
+        return () => ipcRenderer.removeListener('devlog:console', listener);
+      } catch {
+        return () => {};
+      }
+    },
+  });
+
   // Reliable storage API that persists across dev/packaged versions
   contextBridge.exposeInMainWorld('focusStorage', {
     get: async (key) => {
