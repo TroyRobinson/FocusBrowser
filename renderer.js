@@ -4182,6 +4182,7 @@ try {
     try {
       const url = msg?.url || '';
       const wid = msg?.webContentsId;
+      const disposition = msg?.disposition || '';
       if (!url) return;
       const views = getAllWebViews();
       let target = null;
@@ -4194,6 +4195,17 @@ try {
         showBlockedWithAdd(url);
         return;
       }
+      // If Shift+Click triggered a new-window disposition, park current and open in primary view
+      if (disposition === 'new-window') {
+        try { parkCurrentAsActive(true); } catch {}
+        const primary = ensurePrimaryWebView();
+        setLastAllowed(primary, url);
+        try { primary.setAttribute('src', url); } catch { primary.src = url; }
+        closeSettingsOnLoad(primary);
+        switchToWebView(primary);
+        return;
+      }
+      // Default: load in the originating webview
       try { target.setAttribute('src', url); } catch { target.src = url; }
     } catch {}
   });
