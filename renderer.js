@@ -2348,6 +2348,7 @@ async function restoreActiveSessionsFromStorage() {
       const el = document.createElement('webview');
       el.id = `webview-active-${id}`;
       el.setAttribute('disableblinkfeatures', 'AutomationControlled');
+      el.setAttribute('allowpopups', '');
       applyWebViewFrameStyles(el);
       setLastAllowed(el, 'about:blank');
       container?.appendChild(el);
@@ -2697,6 +2698,7 @@ function ensurePrimaryWebView() {
     el.id = 'webview';
     // Do not preset src here; caller will set the destination to avoid flashing about:blank
     el.setAttribute('disableblinkfeatures', 'AutomationControlled');
+    el.setAttribute('allowpopups', '');
     applyWebViewFrameStyles(el);
     const container = getContentContainer();
     container?.appendChild(el);
@@ -4173,6 +4175,29 @@ try {
       default:
         break;
     }
+  });
+} catch {}
+
+// Handle webview window.open/target=_blank routed from main (setWindowOpenHandler)
+try {
+  window.nav?.onOpenURL?.((msg) => {
+    try {
+      const url = msg?.url || '';
+      const wid = msg?.webContentsId;
+      if (!url) return;
+      const views = getAllWebViews();
+      let target = null;
+      for (const v of views) {
+        try { if (typeof v.getWebContentsId === 'function' && v.getWebContentsId() === wid) { target = v; break; } } catch {}
+      }
+      // Fallback to visible webview if mapping fails
+      if (!target) target = getVisibleWebView();
+      if (!isUrlAllowed(url)) {
+        showBlockedWithAdd(url);
+        return;
+      }
+      try { target.setAttribute('src', url); } catch { target.src = url; }
+    } catch {}
   });
 } catch {}
 

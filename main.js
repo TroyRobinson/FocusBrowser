@@ -189,6 +189,16 @@ app.whenReady().then(() => {
       // Forward page console to main DevTools as early as possible
       if (contents.getType && contents.getType() === 'webview') {
         try {
+          // Route window.open / target=_blank events here; deny native window and forward to renderer
+          if (typeof contents.setWindowOpenHandler === 'function') {
+            contents.setWindowOpenHandler((details) => {
+              try {
+                const url = details?.url || '';
+                mainWindow?.webContents?.send?.('webview:open-url', { webContentsId: contents.id, url, disposition: details?.disposition || '' });
+              } catch {}
+              return { action: 'deny' };
+            });
+          }
           contents.on('console-message', (_event, level, message, line, sourceId) => {
             try {
               const payload = {

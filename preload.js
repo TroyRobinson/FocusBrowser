@@ -37,6 +37,14 @@ if (contextBridge && ipcRenderer) {
         // Return a simple unsubscribe if needed
         return () => ipcRenderer.removeListener('nav:action', listener);
       } catch {}
+    },
+    onOpenURL: (handler) => {
+      try {
+        if (typeof handler !== 'function') return () => {};
+        const listener = (_evt, payload) => { try { handler(payload); } catch {} };
+        ipcRenderer.on('webview:open-url', listener);
+        return () => ipcRenderer.removeListener('webview:open-url', listener);
+      } catch { return () => {}; }
     }
   });
 
