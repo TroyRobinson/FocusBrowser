@@ -3160,6 +3160,13 @@ setTimeout(ensureAddressBarFocused, 300);
 // Keyboard shortcuts from main process
 try {
   window.nav?.onNavigate?.((action) => {
+    // When settings are visible, ignore browsing navigation shortcuts
+    const settingsOpen = !!(settingsView && !settingsView.classList.contains('hidden'));
+    if (settingsOpen) {
+      if (action === 'back' || action === 'forward' || action === 'refresh' || action === 'refresh-shift' || action === 'stop') {
+        return; // Disable these while in settings
+      }
+    }
     switch (action) {
       case 'back':
         try { const v = getVisibleWebView(); if (v?.canGoBack?.()) v.goBack(); } catch {}
@@ -3192,3 +3199,18 @@ try {
     }
   });
 } catch {}
+
+// ESC key closes settings when settings screen is open
+(function setupSettingsEscClose() {
+  function handler(e) {
+    try {
+      if (e.key !== 'Escape') return;
+      if (!settingsView || settingsView.classList.contains('hidden')) return;
+      // Close settings (same as clicking the back button)
+      e.preventDefault();
+      e.stopPropagation();
+      leaveSettingsIfOpen();
+    } catch {}
+  }
+  document.addEventListener('keydown', handler, true);
+})();
