@@ -155,6 +155,17 @@ function createWindow() {
       } else if (key === 'n' || key === 'N') {
         event.preventDefault();
         sendNav('toggle-element-select');
+      } else if (key === 'f' || key === 'F') {
+        event.preventDefault();
+        sendNav('find-open');
+      } else if (key === 'g' || key === 'G') {
+        event.preventDefault();
+        const action = input.shift ? 'find-prev' : 'find-next';
+        sendNav(action);
+      } else if (key === 'F3') {
+        event.preventDefault();
+        const action = input.shift ? 'find-prev' : 'find-next';
+        sendNav(action);
       }
     } catch {}
   });
@@ -237,6 +248,17 @@ app.whenReady().then(() => {
             } else if (mod && (key === 'n' || key === 'N')) {
               event.preventDefault();
               sendNav('toggle-element-select');
+            } else if (mod && (key === 'f' || key === 'F')) {
+              event.preventDefault();
+              sendNav('find-open');
+            } else if (mod && (key === 'g' || key === 'G')) {
+              event.preventDefault();
+              const action = input.shift ? 'find-prev' : 'find-next';
+              sendNav(action);
+            } else if (key === 'F3') {
+              event.preventDefault();
+              const action = input.shift ? 'find-prev' : 'find-next';
+              sendNav(action);
             } else if (key === 'Escape') {
               // Let the page also handle ESC; forward stop and selection-exit
               sendNav('stop');

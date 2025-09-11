@@ -89,6 +89,13 @@ const suggestionsEl = document.getElementById('address-suggestions');
 const closeActiveBtn = document.getElementById('close-active-button');
 const activeCountBubble = document.getElementById('active-count-bubble');
 const removalCountBubble = document.getElementById('removal-count-bubble');
+// Find-on-page UI
+const findBar = document.getElementById('find-bar');
+const findInput = document.getElementById('find-input');
+const findPrevBtn = document.getElementById('find-prev');
+const findNextBtn = document.getElementById('find-next');
+const findCountEl = document.getElementById('find-count');
+const findCloseBtn = document.getElementById('find-close');
 // One-shot flag: when Cmd/Ctrl+L focuses the address bar, force-show all active locations
 let forceActiveSuggestionsOnNextFocus = false;
 let isLoading = false;
@@ -841,6 +848,7 @@ function setSettingsVisible(visible) {
     settingsView.classList.remove('hidden');
     allViews.forEach((wv) => wv.classList.add('hidden'));
     try { settingsBtn?.classList.add('active'); } catch {}
+    try { closeFindBar(); } catch {}
     // Show "Settings" in the address bar while settings are open
     try { if (input) input.value = 'Settings'; } catch {}
     // Disable nav arrows while in settings
@@ -2733,6 +2741,35 @@ function wireWebView(el) {
       finishLoadingBar();
     }
   });
+
+  // Re-apply find after page load completes
+  try {
+    el.addEventListener('did-stop-loading', () => {
+      try {
+        if (findOpen && getVisibleWebView() === el && findQuery) {
+          // Restart the search on this page
+          doFind({ initial: true });
+        }
+      } catch {}
+    });
+  } catch {}
+
+  // Update match counts when this webview reports results
+  try {
+    el.addEventListener('found-in-page', (ev) => {
+      try {
+        const res = (ev && ev.result) ? ev.result : ev; // tolerate different event shapes
+        const matches = Number(res?.matches || 0);
+        const active = Number(res?.activeMatchOrdinal || 0);
+        if (!findOpen) return;
+        // Only update if this is the visible webview
+        if (getVisibleWebView() !== el) return;
+        findMatches = matches;
+        findActive = active;
+        updateFindUI();
+      } catch {}
+    });
+  } catch {}
 }
 
 function ensurePrimaryWebView() {
@@ -2820,6 +2857,8 @@ function switchToWebView(el) {
   persistVisibleViewFor(el).catch(() => {});
   // If selection mode is active, ensure highlighter is applied on the new visible view
   try { if (elementSelectMode) { setWebViewHoverHighlighter(el, true); } } catch {}
+  // If find is open, re-run search on the new visible view
+  try { if (findOpen && findQuery) { doFind({ initial: true }); } else { updateFindUI(); } } catch {}
 }
 
 function parkCurrentAsActive(flashUI = false) {
@@ -4251,6 +4290,96 @@ try {
   });
 } catch {}
 
+// --- Find-on-page functionality ---
+let findOpen = false;
+let findQuery = '';
+let findMatches = 0;
+let findActive = 0;
+
+function updateFindUI() {
+  try {
+    if (!findBar || !findCountEl) return;
+    if (!findOpen) {
+      findBar.classList.add('hidden');
+      findCountEl.textContent = '0/0';
+      return;
+    }
+    findBar.classList.remove('hidden');
+    const total = Number(findMatches) || 0;
+    const ord = Number(findActive) || (total ? 1 : 0);
+    findCountEl.textContent = `${ord}/${total}`;
+  } catch {}
+}
+
+async function openFindBar() {
+  try {
+    findOpen = true;
+    try { hideSuggestions?.(); } catch {}
+    const v = getVisibleWebView();
+    // Seed with current selection, if any
+    let seed = '';
+    try { seed = String(findInput?.value || findQuery || '').trim(); } catch { seed = ''; }
+    if (!seed && v && typeof v.executeJavaScript === 'function') {
+      try {
+        const sel = await v.executeJavaScript('(window.getSelection ? window.getSelection().toString() : "")', true);
+        seed = String(sel || '').trim().slice(0, 200);
+      } catch {}
+    }
+    if (findInput) {
+      try { findInput.value = seed; } catch {}
+      setTimeout(() => { try { findInput.focus(); findInput.select?.(); } catch {} }, 0);
+    }
+    findQuery = seed;
+    if (seed) doFind({ initial: true });
+    updateFindUI();
+  } catch {}
+}
+
+function closeFindBar() {
+  try {
+    findOpen = false;
+    const v = getVisibleWebView();
+    try { v?.stopFindInPage?.('clearSelection'); } catch {}
+    findQuery = '';
+    findMatches = 0;
+    findActive = 0;
+    updateFindUI();
+  } catch {}
+}
+
+function doFind(opts = {}) {
+  try {
+    const v = getVisibleWebView();
+    if (!v) return;
+    const q = String(findInput?.value ?? findQuery ?? '').trim();
+    findQuery = q;
+    if (!q) {
+      try { v.stopFindInPage?.('clearSelection'); } catch {}
+      findMatches = 0;
+      findActive = 0;
+      updateFindUI();
+      return;
+    }
+    const initial = !!opts.initial;
+    const backward = !!opts.backward;
+    const options = initial ? { forward: true, findNext: false } : { forward: !backward, findNext: true };
+    try { v.findInPage?.(q, options); } catch {}
+  } catch {}
+}
+
+// Wire find bar UI events
+try { findNextBtn?.addEventListener('click', () => { doFind({}); }); } catch {}
+try { findPrevBtn?.addEventListener('click', () => { doFind({ backward: true }); }); } catch {}
+try { findCloseBtn?.addEventListener('click', () => { closeFindBar(); }); } catch {}
+try { findInput?.addEventListener('input', () => { doFind({ initial: true }); }); } catch {}
+try {
+  findInput?.addEventListener('keydown', (e) => {
+    try {
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (e.shiftKey) doFind({ backward: true }); else doFind({}); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFindBar(); }
+    } catch {}
+  }, true);
+} catch {}
 
 // Keyboard shortcuts from main process
 try {
@@ -4258,7 +4387,7 @@ try {
     // When settings are visible, ignore browsing navigation shortcuts
     const settingsOpen = !!(settingsView && !settingsView.classList.contains('hidden'));
     if (settingsOpen) {
-      if (action === 'back' || action === 'forward' || action === 'refresh' || action === 'refresh-shift' || action === 'stop' || action === 'toggle-element-select') {
+      if (action === 'back' || action === 'forward' || action === 'refresh' || action === 'refresh-shift' || action === 'stop' || action === 'toggle-element-select' || action === 'find-open' || action === 'find-next' || action === 'find-prev') {
         return; // Disable these while in settings
       }
     }
@@ -4306,6 +4435,15 @@ try {
           input?.classList?.remove('click-select-armed');
           renderSuggestions(true); // Force show active locations
         } catch {}
+        break;
+      case 'find-open':
+        try { openFindBar(); } catch {}
+        break;
+      case 'find-next':
+        try { if (!findOpen) openFindBar(); doFind({}); } catch {}
+        break;
+      case 'find-prev':
+        try { if (!findOpen) openFindBar(); doFind({ backward: true }); } catch {}
         break;
       default:
         break;
