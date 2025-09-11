@@ -3835,12 +3835,10 @@ input.addEventListener('keydown', (e) => {
       return;
     }
     
-    // If Shift is held, just park the current view and don't navigate
+    // If Shift is held, park the current view (visual cue), then continue to navigate
     if (e.shiftKey) {
       try { 
         parkCurrentAsActive(true); // Flash the UI when triggered by Shift+Enter
-        // Return early - no navigation
-        return;
       } catch {}
     }
     
