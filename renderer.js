@@ -78,6 +78,7 @@ function updateAddressBarWithURL(url) {
 
 const form = document.getElementById('address-form');
 const input = document.getElementById('address-input');
+try { input?.classList?.add('click-select-armed'); } catch {}
 const settingsBtn = document.getElementById('settings-button');
 const backBtn = document.getElementById('back-button');
 const navBackBtn = document.getElementById('nav-back-button');
@@ -88,6 +89,8 @@ const suggestionsEl = document.getElementById('address-suggestions');
 const closeActiveBtn = document.getElementById('close-active-button');
 const activeCountBubble = document.getElementById('active-count-bubble');
 const removalCountBubble = document.getElementById('removal-count-bubble');
+// One-shot flag: when Cmd/Ctrl+L focuses the address bar, force-show all active locations
+let forceActiveSuggestionsOnNextFocus = false;
 let isLoading = false;
 let loadingInterval = null;
 let loadingProgress = 0; // 0..100
@@ -197,6 +200,8 @@ const DELAY_PENDING_AT_KEY = 'whitelist_delay_pending_activate_at';
 const SORT_MODE_KEY = 'wl_sort_mode_v1'; // 'recent' | 'abc'
 // Dark mode
 const DARK_MODE_KEY = 'dark_mode_enabled_v1';
+// uBlock per-domain persistence (domains where adblock is OFF)
+const ADBLOCK_OFF_DOMAINS_KEY = 'adblock_off_domains_v1';
 
 // Active sessions persistence
 const ACTIVE_SESSIONS_KEY = 'active_sessions_v1';
@@ -310,6 +315,7 @@ function refreshOrNewThread(opts = {}) {
           input.value = '';
           input.focus();
           input.select?.();
+          input?.classList?.remove('click-select-armed');
           input.placeholder = 'Your question...';
           // Surface suggestions (e.g., active sessions) to speed up input
           try { renderSuggestions(true); } catch {}
@@ -456,6 +462,41 @@ async function saveWhitelist(list) {
   }
   const data = JSON.stringify(Array.from(map.values()));
   await safeSetItem(WL_KEY, data);
+}
+
+// --- uBlock per-domain OFF list ---
+function loadAdblockDisabledDomains() {
+  try {
+    const raw = localStorage.getItem(ADBLOCK_OFF_DOMAINS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out = [];
+    const seen = new Set();
+    for (const v of parsed) {
+      if (typeof v !== 'string') continue;
+      const d = v.trim().toLowerCase();
+      if (!d) continue;
+      if (!seen.has(d)) { seen.add(d); out.push(d); }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function saveAdblockDisabledDomains(list) {
+  try {
+    const seen = new Set();
+    const out = [];
+    for (const v of Array.isArray(list) ? list : []) {
+      if (typeof v !== 'string') continue;
+      const d = v.trim().toLowerCase();
+      if (!d) continue;
+      if (!seen.has(d)) { seen.add(d); out.push(d); }
+    }
+    await safeSetItem(ADBLOCK_OFF_DOMAINS_KEY, JSON.stringify(out));
+  } catch {}
 }
 
 function sanitizeDelay(n) {
@@ -2632,22 +2673,26 @@ function wireWebView(el) {
   });
 
   el.addEventListener('did-start-navigation', (e) => {
-    try {
-      const { url, isMainFrame } = e;
-      debugLog('did-start-navigation', { id: viewId(el), url, isMainFrame });
-      if (!isMainFrame) return;
-      if (url && !isUrlAllowed(url)) {
-        el.stop();
-        const last = getLastAllowed(el);
-        debugLog('blocked in did-start-navigation; reverting to lastAllowed', { id: viewId(el), last });
-        if (last && el.getURL?.() !== last) {
-          el.src = last;
-        }
-        showBlockedWithAdd(url);
+  try {
+  const { url, isMainFrame } = e;
+  debugLog('did-start-navigation', { id: viewId(el), url, isMainFrame });
+  if (!isMainFrame) return;
+
+  // Apply domain-specific adblock preference early for visible view
+  try { if (el === getVisibleWebView() && url && url !== 'about:blank') { ensureAdblockStateForURL(url); } } catch {}
+
+  if (url && !isUrlAllowed(url)) {
+  el.stop();
+  const last = getLastAllowed(el);
+  debugLog('blocked in did-start-navigation; reverting to lastAllowed', { id: viewId(el), last });
+    if (last && el.getURL?.() !== last) {
+        el.src = last;
       }
-    } catch {}
-    updateNavButtons();
-  });
+      showBlockedWithAdd(url);
+    }
+  } catch {}
+  updateNavButtons();
+});
 
   el.addEventListener('did-start-loading', () => {
     debugLog('did-start-loading', { id: viewId(el), visible: el === getVisibleWebView(), current: viewURL(el) });
@@ -2711,6 +2756,26 @@ function ensurePrimaryWebView() {
   return el;
 }
 
+let __lastAdblockDesired = null; // null | boolean
+async function ensureAdblockStateForURL(url) {
+  try {
+    let desired = true;
+    try {
+      const u = new URL(String(url || ''));
+      const h = u.hostname || '';
+      if (h) {
+        const d = getRegistrableDomain(h) || h;
+        const list = loadAdblockDisabledDomains();
+        desired = !list.includes(String(d || '').toLowerCase());
+      }
+    } catch {}
+    // Avoid redundant toggles
+    if (__lastAdblockDesired === desired) return;
+    __lastAdblockDesired = desired;
+    await window.adblock?.setEnabled?.(desired);
+  } catch {}
+}
+
 function switchToWebView(el) {
   if (!el) return;
   debugLog('switchToWebView', { from: viewId(currentVisibleView), to: viewId(el), fromURL: viewURL(currentVisibleView), toURL: viewURL(el) });
@@ -2733,6 +2798,8 @@ function switchToWebView(el) {
   try {
     const url = el.getURL?.() || '';
     updateAddressBarWithURL(url);
+    // Apply domain-specific adblock preference for the newly visible view
+    if (url && url !== 'about:blank') { ensureAdblockStateForURL(url); }
     // If the target view is an AI chat page, restore its conversation
     if (isAIChatURL(url)) {
       try {
@@ -3808,8 +3875,30 @@ input.addEventListener('input', () => {
   clearBannerAction(); // Clear banner action when user types
   renderSuggestions(); 
 });
-input.addEventListener('focus', () => { renderSuggestions(); });
+input.addEventListener('focus', () => { if (forceActiveSuggestionsOnNextFocus) { forceActiveSuggestionsOnNextFocus = false; renderSuggestions(true); } else { renderSuggestions(); } });
 input.addEventListener('click', () => { hideExtensionsPopover(); });
+
+// First-click selects all: on the first mouse click after focus, select-all; subsequent clicks place caret.
+let __fbAddressBarSelectedOnce = false;
+
+input.addEventListener('blur', () => {
+  try { 
+    __fbAddressBarSelectedOnce = false; 
+    input?.classList?.add('click-select-armed');
+  } catch {}
+});
+
+input.addEventListener('mousedown', (e) => {
+  try {
+    if (!__fbAddressBarSelectedOnce) {
+      e.preventDefault();
+      input.focus();
+      input.select?.();
+      __fbAddressBarSelectedOnce = true;
+      input?.classList?.remove('click-select-armed');
+    }
+  } catch {}
+});
 
 // Active count bubble click - show active locations in suggestions
 activeCountBubble?.addEventListener('click', (e) => {
@@ -3970,9 +4059,25 @@ function toggleExtensionsPopover() {
 
 async function refreshUboToggle() {
   try {
-    const state = await window.adblock?.getState?.();
-    const enabled = !!state?.enabled;
-    if (uboToggle) uboToggle.checked = enabled;
+    // Reflect domain-specific desired state if current page has a domain; else fall back to global
+    let desired = null;
+    try {
+      const v = getVisibleWebView();
+      const url = v?.getURL?.() || '';
+      if (url && url !== 'about:blank') {
+        const h = new URL(url).hostname || '';
+        if (h) {
+          const d = getRegistrableDomain(h) || h;
+          const list = loadAdblockDisabledDomains();
+          desired = !list.includes(String(d || '').toLowerCase());
+        }
+      }
+    } catch {}
+    if (desired == null) {
+      const state = await window.adblock?.getState?.();
+      desired = !!state?.enabled;
+    }
+    if (uboToggle) uboToggle.checked = !!desired;
   } catch {
     if (uboToggle) uboToggle.checked = false;
   }
@@ -4000,6 +4105,34 @@ extensionsBtn?.addEventListener('click', async (e) => {
 uboToggle?.addEventListener('change', async () => {
   try {
     const next = !!uboToggle.checked;
+
+    // Persist per-domain preference: default is ON for all; when switched OFF for a site, remember that domain
+    let domain = '';
+    try {
+      const v = getVisibleWebView();
+      const url = v?.getURL?.() || '';
+      if (url && url !== 'about:blank') {
+        const h = new URL(url).hostname || '';
+        const d = getRegistrableDomain(h) || h;
+        domain = String(d || '').toLowerCase();
+      }
+    } catch {}
+
+    if (domain) {
+      const list = loadAdblockDisabledDomains();
+      if (!next) {
+        if (!list.includes(domain)) {
+          list.push(domain);
+          await saveAdblockDisabledDomains(list);
+        }
+      } else {
+        const filtered = list.filter((d) => d !== domain);
+        if (filtered.length !== list.length) {
+          await saveAdblockDisabledDomains(filtered);
+        }
+      }
+    }
+
     await window.adblock?.setEnabled?.(next);
   } catch {}
 });
@@ -4165,8 +4298,12 @@ try {
         break;
       case 'focus-address':
         try {
+          // Ensure that after focusing, we show ALL active locations (unfiltered)
+          forceActiveSuggestionsOnNextFocus = true;
           input?.focus?.();
           input?.select?.();
+          __fbAddressBarSelectedOnce = true;
+          input?.classList?.remove('click-select-armed');
           renderSuggestions(true); // Force show active locations
         } catch {}
         break;

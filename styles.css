@@ -138,6 +138,17 @@ body {
   border-color: var(--accent);
 }
 
+/* Address bar hover affordance */
+#address-input {
+  transition: background-color 0.15s ease;
+}
+#address-input:hover {
+  background: rgba(79, 124, 255, 0.08); /* slightly light blue tint */
+}
+#address-input.click-select-armed:hover {
+  cursor: pointer; /* hand on first-click state only */
+}
+
 /* Multiline behavior for the settings domains input */
 textarea.address-input {
   resize: none; /* auto-size via JS */
@@ -314,6 +325,11 @@ textarea.address-input {
 }
 #extensions-button .icon {
   display: block;
+}
+
+/* Close button state-specific color: default inherits .icon-button (fg); X state uses accent */
+#close-active-button[aria-label="Close active session"] {
+  color: var(--accent);
 }
 
 .extensions-item {
