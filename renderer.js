@@ -1486,8 +1486,11 @@ async function setWebViewDarkMode(view, enable) {
       }
     }
     
-    const cssText = 'html { filter: invert(1) hue-rotate(180deg) !important; background: #111 !important; }\n'
-                 + 'img, picture, video, canvas, iframe, svg, [style*="background-image"] { filter: invert(1) hue-rotate(180deg) !important; }';
+    const cssText = 'html { filter: invert(1) hue-rotate(180deg) !important; background: #eee !important; }\n'
+                 + 'img, picture, video, canvas, iframe, svg, [style*="background-image"] { filter: invert(1) hue-rotate(180deg) !important; }\n'
+                 + 'body { background: #eee !important; }\n'
+                 + '/* Ensure outer viewport areas that might be transparent get a light background that inverts to dark */\n'
+                 + 'html::before { content: ""; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #eee !important; z-index: -999999; pointer-events: none; }';
 
     // Prefer insertCSS (CSP-friendly), fall back to DOM injection
     if (enable) {
