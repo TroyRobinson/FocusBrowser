@@ -62,7 +62,8 @@ function updateAddressBarWithURL(url) {
         // Extract query from the HTML title
         const titleMatch = decoded.match(/<title>AI Chat - (.*?)<\/title>/);
         if (titleMatch && titleMatch[1]) {
-          input.value = `AI: ${titleMatch[1]}`;
+          const clean = decodeHTMLEntities(titleMatch[1]);
+          input.value = `AI: ${clean}`;
           return;
         }
       }
@@ -116,6 +117,28 @@ function debugLog(...args) {
     });
     console.log(`[FocusDebug ${ts}]`, ...parts);
   } catch {}
+}
+
+// Decode minimal HTML entities to show clean text in the address bar
+function decodeHTMLEntities(str) {
+  try {
+    if (!str) return '';
+    // Handle numeric entities: decimal and hex
+    let s = String(str)
+      .replace(/&#(\d+);/g, (_, d) => {
+        try { const code = parseInt(d, 10); return Number.isFinite(code) ? String.fromCharCode(code) : _; } catch { return _; }
+      })
+      .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => {
+        try { const code = parseInt(h, 16); return Number.isFinite(code) ? String.fromCharCode(code) : _; } catch { return _; }
+      });
+    // Named minimal entities we use
+    s = s.replace(/&amp;/g, '&')
+         .replace(/&lt;/g, '<')
+         .replace(/&gt;/g, '>')
+         .replace(/&quot;/g, '"')
+         .replace(/&#39;/g, "'");
+    return s;
+  } catch { return String(str || ''); }
 }
 
 function applyWebViewFrameStyles(el) {
@@ -214,7 +237,7 @@ function getAIChatInitialQueryFromWebView(el) {
       try {
         const decoded = decodeURIComponent(url.replace('data:text/html;charset=utf-8,', '').replace('data:text/html,', ''));
         const m = decoded.match(/<title>AI Chat - (.*?)<\/title>/);
-        if (m && m[1]) return String(m[1]).trim();
+        if (m && m[1]) return decodeHTMLEntities(String(m[1]).trim());
       } catch {}
     }
   } catch {}
