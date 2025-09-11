@@ -1133,6 +1133,100 @@ settingsBtn?.addEventListener('click', () => {
   document.addEventListener('keydown', handler, true);
 })();
 
+// Element selection mode: Cmd/Ctrl+N toggles a hover highlighter inside the page
+let elementSelectMode = false;
+const ELEMENT_SELECT_COLOR = '#4f7cff'; // brand accent from styles.css
+
+function getAllWebViews() {
+  try { return Array.from(document.querySelectorAll('webview')); } catch { return []; }
+}
+
+// getVisibleWebView is defined later in the file; rely on that definition
+
+async function setWebViewHoverHighlighter(view, enable) {
+  try {
+    if (!view || typeof view.executeJavaScript !== 'function') return;
+    const code = `(() => { try {
+      const enable = ${enable ? 'true' : 'false'};
+      const KEY = '__FB_HOVER_HIGHLIGHT__';
+      const g = window;
+      function cleanup() {
+        try {
+          const st = g[KEY];
+          if (!st) return;
+          try {
+            const clsName = st.cls || '__fb_hh_target__';
+            const all = document.querySelectorAll('.' + clsName);
+            for (const n of all) n.classList.remove(clsName);
+          } catch {}
+          if (st.styleEl && st.styleEl.parentNode) st.styleEl.parentNode.removeChild(st.styleEl);
+          if (st.onMove) document.removeEventListener('mousemove', st.onMove, true);
+          if (st.onLeave) document.removeEventListener('mouseleave', st.onLeave, true);
+          if (st.onBlur) g.removeEventListener('blur', st.onBlur, true);
+          if (st.onScroll) g.removeEventListener('scroll', st.onScroll, true);
+          if (st.onResize) g.removeEventListener('resize', st.onResize, true);
+          g[KEY] = null;
+        } catch {}
+      }
+      if (!enable) { cleanup(); return 'disabled'; }
+      cleanup();
+      const styleEl = document.createElement('style');
+      const cls = '__fb_hh_target__';
+      styleEl.textContent = '.' + cls + '{outline:2px solid ${ELEMENT_SELECT_COLOR} !important; outline-offset:-2px !important;}';
+      (document.head || document.documentElement || document.body).appendChild(styleEl);
+      let last = null, lastX = 0, lastY = 0;
+      const pick = () => {
+        try {
+          const el = document.elementFromPoint(lastX, lastY);
+          if (!el) { if (last) { last.classList.remove(cls); last = null; } return; }
+          if (el === last) return;
+          if (last) last.classList.remove(cls);
+          last = el;
+          last.classList.add(cls);
+        } catch {}
+      };
+      const onMove = (e) => { lastX = e.clientX; lastY = e.clientY; pick(); };
+      const onLeave = () => { if (last) last.classList.remove(cls); last = null; };
+      const onBlur = () => { if (last) last.classList.remove(cls); last = null; };
+      const onScroll = () => { pick(); };
+      const onResize = () => { pick(); };
+      document.addEventListener('mousemove', onMove, true);
+      document.addEventListener('mouseleave', onLeave, true);
+      g.addEventListener('blur', onBlur, true);
+      g.addEventListener('scroll', onScroll, true);
+      g.addEventListener('resize', onResize, true);
+      g[KEY] = { styleEl, cls, onMove, onLeave, onBlur, onScroll, onResize };
+      return 'enabled';
+    } catch (e) { return 'error:' + (e && e.message || '') } })();`;
+    await view.executeJavaScript(code, true).catch(() => {});
+  } catch {}
+}
+
+async function applySelectionMode(en) {
+  elementSelectMode = !!en;
+  try {
+    if (elementSelectMode) {
+      const v = getVisibleWebView();
+      await setWebViewHoverHighlighter(v, true);
+      // Show a one-time hint near the address bar
+      try {
+        const seen = await window.storage?.get?.('seenElementSelectHint');
+        if (!seen) {
+          showBanner('Selection mode on — press Esc to exit', '', 4000);
+          await window.storage?.set?.('seenElementSelectHint', true);
+        }
+      } catch {}
+    } else {
+      const views = getAllWebViews();
+      await Promise.all(views.map((v) => setWebViewHoverHighlighter(v, false)));
+    }
+  } catch {}
+}
+
+async function toggleElementSelectMode() {
+  await applySelectionMode(!elementSelectMode);
+}
+
 // Cmd/Ctrl+Enter submits the Add Domain form while settings are visible
 (function setupSubmitShortcut() {
   function handler(e) {
@@ -1758,6 +1852,8 @@ function wireWebView(el) {
     updateRefreshButtonUI();
     updateCloseButtonUI();
     finishLoadingBar();
+    // Re-apply hover highlighter if selection mode is active and this view is visible
+    try { if (elementSelectMode && el === getVisibleWebView()) { setWebViewHoverHighlighter(el, true); } } catch {}
   });
 
   // Track page title changes so suggestions stay fresh
@@ -1882,6 +1978,8 @@ function switchToWebView(el) {
   } catch {}
   // Persist which view is visible
   persistVisibleViewFor(el).catch(() => {});
+  // If selection mode is active, ensure highlighter is applied on the new visible view
+  try { if (elementSelectMode) { setWebViewHoverHighlighter(el, true); } } catch {}
 }
 
 function parkCurrentAsActive(flashUI = false) {
@@ -3163,7 +3261,7 @@ try {
     // When settings are visible, ignore browsing navigation shortcuts
     const settingsOpen = !!(settingsView && !settingsView.classList.contains('hidden'));
     if (settingsOpen) {
-      if (action === 'back' || action === 'forward' || action === 'refresh' || action === 'refresh-shift' || action === 'stop') {
+      if (action === 'back' || action === 'forward' || action === 'refresh' || action === 'refresh-shift' || action === 'stop' || action === 'toggle-element-select') {
         return; // Disable these while in settings
       }
     }
@@ -3194,6 +3292,12 @@ try {
           const loading = typeof v?.isLoading === 'function' ? !!v.isLoading() : !!isLoading;
           if (loading) v?.stop?.();
         } catch {}
+        break;
+      case 'toggle-element-select':
+        try { toggleElementSelectMode(); } catch {}
+        break;
+      case 'exit-element-select':
+        try { applySelectionMode(false); } catch {}
         break;
       case 'focus-address':
         try {

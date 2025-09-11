@@ -70,7 +70,7 @@ function createWindow() {
     mainWindow.show();
   });
 
-  // Keyboard shortcuts: Cmd/Ctrl + ArrowLeft/ArrowRight, Cmd/Ctrl + R, Cmd/Ctrl + L, Esc (stop)
+  // Keyboard shortcuts: Cmd/Ctrl + ArrowLeft/ArrowRight, Cmd/Ctrl + R, Cmd/Ctrl + L, Cmd/Ctrl + N (toggle element select), Esc (stop)
   mainWindow.webContents.on('before-input-event', (event, input) => {
     try {
       if (input?.type && input.type !== 'keyDown') return;
@@ -85,10 +85,11 @@ function createWindow() {
         }
         return;
       }
-      // Esc: stop loading (no modifier)
+      // Esc: stop loading (no modifier) and exit element selection
       if (key === 'Escape') {
         // Do not prevent default to avoid interfering with page ESC usage
         sendNav('stop');
+        sendNav('exit-element-select');
         return;
       }
       const mod = input.control || input.meta;
@@ -106,6 +107,9 @@ function createWindow() {
       } else if (key === 'l' || key === 'L') {
         event.preventDefault();
         sendNav('focus-address');
+      } else if (key === 'n' || key === 'N') {
+        event.preventDefault();
+        sendNav('toggle-element-select');
       }
     } catch {}
   });
@@ -155,9 +159,13 @@ app.whenReady().then(() => {
             } else if (mod && (key === 'l' || key === 'L')) {
               event.preventDefault();
               sendNav('focus-address');
+            } else if (mod && (key === 'n' || key === 'N')) {
+              event.preventDefault();
+              sendNav('toggle-element-select');
             } else if (key === 'Escape') {
-              // Let the page also handle ESC; just forward stop
+              // Let the page also handle ESC; forward stop and selection-exit
               sendNav('stop');
+              sendNav('exit-element-select');
             }
           } catch {}
         });
