@@ -3167,6 +3167,14 @@ try {
         return; // Disable these while in settings
       }
     }
+    // If a text input/textarea/contenteditable is focused, ignore back/forward
+    try {
+      const active = document.activeElement;
+      const inText = isFocusableInput?.(active);
+      if (inText && (action === 'back' || action === 'forward')) {
+        return;
+      }
+    } catch {}
     switch (action) {
       case 'back':
         try { const v = getVisibleWebView(); if (v?.canGoBack?.()) v.goBack(); } catch {}

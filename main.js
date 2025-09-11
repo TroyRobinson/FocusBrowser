@@ -14,6 +14,20 @@ let adblockEnabled = true;
 let devToolsEnabled = false;
 const managedSessions = new Set();
 
+// Coalesce navigation events to avoid duplicates from multiple sources
+let _lastNavAction = '';
+let _lastNavAt = 0;
+function sendNav(action) {
+  try {
+    const now = Date.now();
+    // Drop if same action fired very recently (e.g., from nested webContents)
+    if (_lastNavAction === action && (now - _lastNavAt) < 120) return;
+    _lastNavAction = action;
+    _lastNavAt = now;
+    mainWindow?.webContents?.send('nav:action', action);
+  } catch {}
+}
+
 function enableBlockingIn(sess) {
   if (!blocker || !sess) return;
   try {
@@ -59,6 +73,7 @@ function createWindow() {
   // Keyboard shortcuts: Cmd/Ctrl + ArrowLeft/ArrowRight, Cmd/Ctrl + R, Cmd/Ctrl + L, Esc (stop)
   mainWindow.webContents.on('before-input-event', (event, input) => {
     try {
+      if (input?.type && input.type !== 'keyDown') return;
       const key = input.key;
       // F12: toggle devtools (no modifier)
       if (key === 'F12' && devToolsEnabled) {
@@ -73,24 +88,24 @@ function createWindow() {
       // Esc: stop loading (no modifier)
       if (key === 'Escape') {
         // Do not prevent default to avoid interfering with page ESC usage
-        mainWindow?.webContents?.send('nav:action', 'stop');
+        sendNav('stop');
         return;
       }
       const mod = input.control || input.meta;
       if (!mod) return;
       if (key === 'ArrowLeft') {
-        event.preventDefault();
-        mainWindow?.webContents?.send('nav:action', 'back');
+        // Do not prevent default so text inputs keep word/line navigation
+        sendNav('back');
       } else if (key === 'ArrowRight') {
-        event.preventDefault();
-        mainWindow?.webContents?.send('nav:action', 'forward');
+        // Do not prevent default so text inputs keep word/line navigation
+        sendNav('forward');
       } else if (key === 'r' || key === 'R') {
         event.preventDefault();
         const action = input.shift ? 'refresh-shift' : 'refresh';
-        mainWindow?.webContents?.send('nav:action', action);
+        sendNav(action);
       } else if (key === 'l' || key === 'L') {
         event.preventDefault();
-        mainWindow?.webContents?.send('nav:action', 'focus-address');
+        sendNav('focus-address');
       }
     } catch {}
   });
@@ -124,24 +139,25 @@ app.whenReady().then(() => {
       if (contents.getType && contents.getType() === 'webview') {
         contents.on('before-input-event', (event, input) => {
           try {
+            if (input?.type && input.type !== 'keyDown') return;
             const key = input.key;
             const mod = input.control || input.meta;
             if (mod && key === 'ArrowLeft') {
-              event.preventDefault();
-              mainWindow?.webContents?.send('nav:action', 'back');
+              // Do not prevent default so text inputs keep word/line navigation
+              sendNav('back');
             } else if (mod && key === 'ArrowRight') {
-              event.preventDefault();
-              mainWindow?.webContents?.send('nav:action', 'forward');
+              // Do not prevent default so text inputs keep word/line navigation
+              sendNav('forward');
             } else if (mod && (key === 'r' || key === 'R')) {
               event.preventDefault();
               const action = input.shift ? 'refresh-shift' : 'refresh';
-              mainWindow?.webContents?.send('nav:action', action);
+              sendNav(action);
             } else if (mod && (key === 'l' || key === 'L')) {
               event.preventDefault();
-              mainWindow?.webContents?.send('nav:action', 'focus-address');
+              sendNav('focus-address');
             } else if (key === 'Escape') {
               // Let the page also handle ESC; just forward stop
-              mainWindow?.webContents?.send('nav:action', 'stop');
+              sendNav('stop');
             }
           } catch {}
         });
