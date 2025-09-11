@@ -194,16 +194,17 @@ const LLM_PENDING_AT_KEY = 'llm_pending_activate_at';
 
 // AI conversation tracking
 let currentConversation = null; // { messages: [], webview: element }
+// Preserve conversations per webview so back/forward restores the thread
+const conversationByView = new WeakMap();
 
 function resetConversationIfNeeded(webview, newURL) {
-  // Reset conversation when navigating away from AI chat
+  // When navigating away from AI chat, preserve the conversation state so Back continues the thread.
   if (currentConversation && currentConversation.webview === webview) {
-    const isAIChat = newURL && newURL.startsWith('data:text/html') && 
+    const isAIChat = newURL && newURL.startsWith('data:text/html') &&
                      (newURL.includes('AI%20Chat') || newURL.includes('AI Chat'));
     if (!isAIChat) {
-      debugLog('resetting conversation', { id: viewId(webview), newURL });
-      currentConversation = null;
-      // Reset address bar placeholder
+      debugLog('leaving AI chat, preserving conversation', { id: viewId(webview), newURL });
+      // Do NOT clear currentConversation; keep placeholder neutral
       if (input) {
         input.placeholder = '';
       }
@@ -257,6 +258,7 @@ function refreshOrNewThread(opts = {}) {
     if (isAIChatURL(url)) {
       // Clear current conversation and show a blank AI chat page
       currentConversation = null;
+      try { conversationByView.delete(v); } catch {}
       try { if (input) input.placeholder = ''; } catch {}
 
       const conversation = { messages: [] };
@@ -270,10 +272,12 @@ function refreshOrNewThread(opts = {}) {
         setLastAllowed(dest, dataURL);
         try { dest?.setAttribute?.('src', dataURL); } catch { try { dest.src = dataURL; } catch {} }
         switchToWebView(dest);
+        try { conversationByView.delete(dest); } catch {}
       } else {
         // Default behavior: reset this webview in-place
         setLastAllowed(v, dataURL);
         try { v?.setAttribute?.('src', dataURL); } catch { try { v.src = dataURL; } catch {} }
+        try { conversationByView.delete(v); } catch {}
       }
 
       // Focus and clear the address bar so user can type the initial term(s)
@@ -1602,6 +1606,18 @@ function wireWebView(el) {
     
     // Reset conversation if navigating away from AI chat
     resetConversationIfNeeded(el, e.url);
+    // If navigating to an AI chat URL, restore its conversation (so Back continues the thread)
+    try {
+      if (isAIChatURL(e.url)) {
+        const saved = conversationByView.get(el);
+        if (saved) {
+          currentConversation = saved;
+          if (input) input.placeholder = 'Continue the conversation...';
+        } else {
+          if (input) input.placeholder = 'Your question...';
+        }
+      }
+    } catch {}
     
     if (el === getVisibleWebView()) {
       updateAddressBarWithURL(e.url);
@@ -1638,6 +1654,18 @@ function wireWebView(el) {
     if (e.url && isUrlAllowed(e.url)) {
       setLastAllowed(el, e.url);
     }
+    // Restore conversation placeholder when navigating within AI chat
+    try {
+      if (isAIChatURL(e.url)) {
+        const saved = conversationByView.get(el);
+        if (saved) {
+          currentConversation = saved;
+          if (input) input.placeholder = 'Continue the conversation...';
+        } else {
+          if (input) input.placeholder = 'Your question...';
+        }
+      }
+    } catch {}
     // Update persisted active session if applicable
     try {
       const aid = findActiveIdByWebView(el);
@@ -1822,6 +1850,18 @@ function switchToWebView(el) {
   try {
     const url = el.getURL?.() || '';
     updateAddressBarWithURL(url);
+    // If the target view is an AI chat page, restore its conversation
+    if (isAIChatURL(url)) {
+      try {
+        const saved = conversationByView.get(el);
+        if (saved) {
+          currentConversation = saved;
+          if (input) input.placeholder = 'Continue the conversation...';
+        } else {
+          if (input) input.placeholder = 'Your question...';
+        }
+      } catch {}
+    }
   } catch {}
   // Persist which view is visible
   persistVisibleViewFor(el).catch(() => {});
@@ -2302,6 +2342,7 @@ async function handleAIChat(query, opts = {}) {
       }
     }
     conversation.webview = dest;
+    try { conversationByView.set(dest, conversation); } catch {}
   } else {
     // For follow-ups, just update the current webview with loading state
     debugLog('set AI chat src (follow-up)', { id: viewId(dest), query });
