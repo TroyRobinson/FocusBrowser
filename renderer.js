@@ -1394,11 +1394,14 @@ async function setWebViewHoverHighlighter(view, enable) {
           if (!el) return;
           // Do not remove <html> or <body>
           if (el === document.documentElement || el === document.body) return;
-          // Compute a stable signature
+          // Compute a stable signature: prefer CSS, else fall back to text
           const sel = buildSelector(el);
-          const ts = textSignature(el);
-          if (sel) { sigs.push({ kind: 'css', selector: sel }); }
-          if (ts) { sigs.push(ts); }
+          if (sel) {
+            sigs.push({ kind: 'css', selector: sel });
+          } else {
+            const ts = textSignature(el);
+            if (ts) sigs.push(ts);
+          }
           // If our highlight was on another element, clear its class
           if (last && last !== el) { try { last.classList.remove(cls); } catch {} }
           try { el.remove(); } catch {}
