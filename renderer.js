@@ -222,11 +222,14 @@ function getAIChatInitialQueryFromWebView(el) {
 }
 
 // Handle refresh semantics: if on AI chat, start a new thread; otherwise reload/stop
-function refreshOrNewThread() {
+// If opts.shiftKey/shiftToActive is true while on AI chat, park the current
+// chat thread as an active location and start the new thread in a fresh primary view.
+function refreshOrNewThread(opts = {}) {
   try {
     const v = getVisibleWebView();
     const url = v?.getURL?.() || '';
     const loading = typeof v?.isLoading === 'function' ? !!v.isLoading() : !!isLoading;
+    const shiftToActive = !!(opts.shiftKey || opts.shiftToActive);
 
     if (isAIChatURL(url)) {
       // Clear current conversation and show a blank AI chat page
@@ -236,8 +239,19 @@ function refreshOrNewThread() {
       const conversation = { messages: [] };
       const html = generateAIChatHTML(conversation, false);
       const dataURL = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
-      setLastAllowed(v, dataURL);
-      try { v?.setAttribute?.('src', dataURL); } catch { try { v.src = dataURL; } catch {} }
+
+      if (shiftToActive) {
+        // Park current chat thread (if not already active) and start a new thread in a fresh primary webview
+        try { parkCurrentAsActive(); } catch {}
+        const dest = ensurePrimaryWebView();
+        setLastAllowed(dest, dataURL);
+        try { dest?.setAttribute?.('src', dataURL); } catch { try { dest.src = dataURL; } catch {} }
+        switchToWebView(dest);
+      } else {
+        // Default behavior: reset this webview in-place
+        setLastAllowed(v, dataURL);
+        try { v?.setAttribute?.('src', dataURL); } catch { try { v.src = dataURL; } catch {} }
+      }
 
       // Focus and clear the address bar so user can type the initial term(s)
       try {
@@ -2726,6 +2740,8 @@ function updateRefreshButtonUI() {
   try {
     const view = getVisibleWebView();
     const loading = typeof view?.isLoading === 'function' ? !!view.isLoading() : !!isLoading;
+    const url = view?.getURL?.() || '';
+    const inAIChat = isAIChatURL(url);
     if (loading) {
       navRefreshBtn.textContent = '⨯';
       navRefreshBtn.classList.add('danger');
@@ -2814,7 +2830,7 @@ navRefreshBtn?.addEventListener('click', (e) => {
     debugLog('navRefresh click', { id: viewId(v), url: viewURL(v), loading });
   } catch {}
   // Delegate to unified handler (AI new-thread vs reload/stop)
-  refreshOrNewThread();
+  refreshOrNewThread({ shiftKey: !!e.shiftKey });
 });
 
 closeActiveBtn?.addEventListener('click', (e) => {
@@ -3069,6 +3085,9 @@ try {
         break;
       case 'forward':
         try { const v = getVisibleWebView(); if (v?.canGoForward?.()) v.goForward(); } catch {}
+        break;
+      case 'refresh-shift':
+        try { refreshOrNewThread({ shiftToActive: true }); } catch {}
         break;
       case 'refresh':
         try { refreshOrNewThread(); } catch {}

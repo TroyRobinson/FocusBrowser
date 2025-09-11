@@ -86,7 +86,8 @@ function createWindow() {
         mainWindow?.webContents?.send('nav:action', 'forward');
       } else if (key === 'r' || key === 'R') {
         event.preventDefault();
-        mainWindow?.webContents?.send('nav:action', 'refresh');
+        const action = input.shift ? 'refresh-shift' : 'refresh';
+        mainWindow?.webContents?.send('nav:action', action);
       } else if (key === 'l' || key === 'L') {
         event.preventDefault();
         mainWindow?.webContents?.send('nav:action', 'focus-address');
@@ -133,7 +134,8 @@ app.whenReady().then(() => {
               mainWindow?.webContents?.send('nav:action', 'forward');
             } else if (mod && (key === 'r' || key === 'R')) {
               event.preventDefault();
-              mainWindow?.webContents?.send('nav:action', 'refresh');
+              const action = input.shift ? 'refresh-shift' : 'refresh';
+              mainWindow?.webContents?.send('nav:action', action);
             } else if (mod && (key === 'l' || key === 'L')) {
               event.preventDefault();
               mainWindow?.webContents?.send('nav:action', 'focus-address');
