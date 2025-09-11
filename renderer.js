@@ -781,6 +781,9 @@ function setSettingsVisible(visible) {
     try { if (input) input.value = 'Settings'; } catch {}
     // Disable nav arrows while in settings
     try { updateNavButtons(); } catch {}
+    // Hide address bar bubbles while in settings
+    try { activeCountBubble?.classList?.add?.('hidden'); } catch {}
+    try { removalCountBubble?.classList?.add?.('hidden'); } catch {}
   } else {
     settingsView.classList.add('hidden');
     // restore only current visible view
@@ -789,6 +792,9 @@ function setSettingsVisible(visible) {
     // Restore address bar to current view URL
     try { const v = getVisibleWebView(); const url = v?.getURL?.() || ''; updateAddressBarWithURL(url); } catch {}
     try { updateNavButtons(); } catch {}
+    // Restore bubbles to reflect current state
+    try { updateActiveCountBubble(); } catch {}
+    try { updateRemovalCountBubble(); } catch {}
   }
 }
 
@@ -1311,6 +1317,8 @@ async function clearDomainRemovalRulesImmediate(domain, { silent = false } = {})
 async function updateRemovalCountBubble() {
   try {
     if (!removalCountBubble) return;
+    // While settings are visible, hide bubble entirely
+    if (settingsView && !settingsView.classList.contains('hidden')) { removalCountBubble.classList.add('hidden'); return; }
     const v = getVisibleWebView();
     const url = v?.getURL?.() || '';
     if (!url || url === 'about:blank') { removalCountBubble.classList.add('hidden'); return; }
@@ -3445,6 +3453,8 @@ function updateRefreshButtonUI() {
 function updateActiveCountBubble(flash = false) {
   try {
     if (!activeCountBubble) return;
+    // While settings are visible, hide bubble entirely
+    if (settingsView && !settingsView.classList.contains('hidden')) { activeCountBubble.classList.add('hidden'); return; }
     const count = activeLocations.size;
     
     if (count > 0) {
