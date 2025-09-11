@@ -58,7 +58,7 @@ function updateAddressBarWithURL(url) {
     // Check if this is an AI chat data URL by looking for AI chat HTML content
     try {
       const decoded = decodeURIComponent(url.replace('data:text/html;charset=utf-8,', ''));
-      if (decoded.includes('AI Chat -') && decoded.includes('Your Question')) {
+      if (decoded.includes('AI Chat -')) {
         // Extract query from the HTML title
         const titleMatch = decoded.match(/<title>AI Chat - (.*?)<\/title>/);
         if (titleMatch && titleMatch[1]) {
@@ -67,8 +67,9 @@ function updateAddressBarWithURL(url) {
         }
       }
     } catch {}
-    // Fall back to generic AI display if we can't extract the query
-    input.value = 'AI Chat';
+    // For AI chat pages without a specific query, keep the field empty
+    input.value = '';
+    try { input.placeholder = 'Your question...'; } catch {}
   } else {
     input.value = url || input.value;
   }
@@ -185,6 +186,57 @@ function resetConversationIfNeeded(webview, newURL) {
       }
     }
   }
+}
+
+// Helper: detect if a URL/webview is showing an AI Chat thread
+function isAIChatURL(url) {
+  try {
+    const u = String(url || '');
+    return u.startsWith('data:text/html') && (u.includes('AI%20Chat') || u.includes('AI Chat'));
+  } catch {
+    return false;
+  }
+}
+
+// Handle refresh semantics: if on AI chat, start a new thread; otherwise reload/stop
+function refreshOrNewThread() {
+  try {
+    const v = getVisibleWebView();
+    const url = v?.getURL?.() || '';
+    const loading = typeof v?.isLoading === 'function' ? !!v.isLoading() : !!isLoading;
+
+    if (isAIChatURL(url)) {
+      // Clear current conversation and show a blank AI chat page
+      currentConversation = null;
+      try { if (input) input.placeholder = ''; } catch {}
+
+      const conversation = { messages: [] };
+      const html = generateAIChatHTML(conversation, false);
+      const dataURL = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+      setLastAllowed(v, dataURL);
+      try { v?.setAttribute?.('src', dataURL); } catch { try { v.src = dataURL; } catch {} }
+
+      // Focus and clear the address bar so user can type the initial term(s)
+      try {
+        if (input) {
+          input.value = '';
+          input.focus();
+          input.select?.();
+          input.placeholder = 'Your question...';
+          // Surface suggestions (e.g., active sessions) to speed up input
+          try { renderSuggestions(true); } catch {}
+        }
+      } catch {}
+      return; // Do not fall-through to reload/stop
+    }
+
+    // Non-AI pages: keep standard refresh/stop behavior
+    if (loading) {
+      v?.stop?.();
+    } else {
+      v?.reload?.();
+    }
+  } catch {}
 }
 
 // Cached sort mode for synchronous access
@@ -2668,12 +2720,9 @@ navRefreshBtn?.addEventListener('click', (e) => {
     const v = getVisibleWebView();
     const loading = typeof v?.isLoading === 'function' ? !!v.isLoading() : !!isLoading;
     debugLog('navRefresh click', { id: viewId(v), url: viewURL(v), loading });
-    if (loading) {
-      v?.stop?.();
-    } else {
-      v?.reload?.();
-    }
   } catch {}
+  // Delegate to unified handler (AI new-thread vs reload/stop)
+  refreshOrNewThread();
 });
 
 closeActiveBtn?.addEventListener('click', (e) => {
@@ -2930,7 +2979,7 @@ try {
         try { const v = getVisibleWebView(); if (v?.canGoForward?.()) v.goForward(); } catch {}
         break;
       case 'refresh':
-        try { getVisibleWebView()?.reload?.(); } catch {}
+        try { refreshOrNewThread(); } catch {}
         break;
       case 'stop':
         try {
