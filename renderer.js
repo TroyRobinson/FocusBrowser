@@ -198,6 +198,29 @@ function isAIChatURL(url) {
   }
 }
 
+// Helper: pull the initial AI query for a chat thread displayed in a webview
+function getAIChatInitialQueryFromWebView(el) {
+  try {
+    const v = el;
+    // Prefer live conversation state if this webview owns it
+    if (currentConversation && currentConversation.webview === v) {
+      const firstUser = (currentConversation.messages || []).find(m => m.role === 'user');
+      const q = (firstUser?.content || '').trim();
+      if (q) return q;
+    }
+    // Fallback: parse from data URL title
+    const url = v?.getURL?.() || '';
+    if (url.startsWith('data:text/html')) {
+      try {
+        const decoded = decodeURIComponent(url.replace('data:text/html;charset=utf-8,', '').replace('data:text/html,', ''));
+        const m = decoded.match(/<title>AI Chat - (.*?)<\/title>/);
+        if (m && m[1]) return String(m[1]).trim();
+      } catch {}
+    }
+  } catch {}
+  return '';
+}
+
 // Handle refresh semantics: if on AI chat, start a new thread; otherwise reload/stop
 function refreshOrNewThread() {
   try {
@@ -1555,7 +1578,13 @@ function wireWebView(el) {
       if (aid && activeLocations.has(aid)) {
         const rec = activeLocations.get(aid);
         rec.url = e.url || rec.url;
-        try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
+        try {
+          if (isAIChatURL(e.url || el.getURL?.() || '')) {
+            rec.title = getAIChatInitialQueryFromWebView(el) || rec.title || '';
+          } else {
+            rec.title = el.getTitle?.() || rec.title || '';
+          }
+        } catch {}
         persistActiveSessions().catch(() => {});
       }
     } catch {}
@@ -1578,7 +1607,13 @@ function wireWebView(el) {
       if (aid && activeLocations.has(aid)) {
         const rec = activeLocations.get(aid);
         rec.url = e.url || rec.url;
-        try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
+        try {
+          if (isAIChatURL(e.url || el.getURL?.() || '')) {
+            rec.title = getAIChatInitialQueryFromWebView(el) || rec.title || '';
+          } else {
+            rec.title = el.getTitle?.() || rec.title || '';
+          }
+        } catch {}
         persistActiveSessions().catch(() => {});
       }
     } catch {}
@@ -1629,7 +1664,13 @@ function wireWebView(el) {
         if (aid && activeLocations.has(aid)) {
           const rec = activeLocations.get(aid);
           rec.url = current || rec.url;
-          try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
+          try {
+            if (isAIChatURL(current || el.getURL?.() || '')) {
+              rec.title = getAIChatInitialQueryFromWebView(el) || rec.title || '';
+            } else {
+              rec.title = el.getTitle?.() || rec.title || '';
+            }
+          } catch {}
           persistActiveSessions().catch(() => {});
         }
       } catch {}
@@ -1646,7 +1687,14 @@ function wireWebView(el) {
       const aid = findActiveIdByWebView(el);
       if (aid && activeLocations.has(aid)) {
         const rec = activeLocations.get(aid);
-        try { rec.title = el.getTitle?.() || rec.title || ''; } catch {}
+        try {
+          const nowUrl = el.getURL?.() || '';
+          if (isAIChatURL(nowUrl)) {
+            rec.title = getAIChatInitialQueryFromWebView(el) || rec.title || '';
+          } else {
+            rec.title = el.getTitle?.() || rec.title || '';
+          }
+        } catch {}
         persistActiveSessions().catch(() => {});
       }
     } catch {}
@@ -1758,8 +1806,13 @@ function parkCurrentAsActive(flashUI = false) {
     applyWebViewFrameStyles(el);
     // Defer creating a new primary until navigate() actually needs it
   }
-  activeLocations.set(id, { id, title: '', url: currentURL, webview: el });
-  debugLog('parkCurrentAsActive: created', { id, viewId: viewId(el), url: currentURL });
+  // Seed title: if this is an AI chat thread, use its initial query as the title
+  let seedTitle = '';
+  if (isAIChatURL(currentURL)) {
+    seedTitle = getAIChatInitialQueryFromWebView(el) || '';
+  }
+  activeLocations.set(id, { id, title: seedTitle, url: currentURL, webview: el });
+  debugLog('parkCurrentAsActive: created', { id, viewId: viewId(el), url: currentURL, title: seedTitle });
   
   // Update bubble count and close button UI
   updateActiveCountBubble(flashUI);
@@ -1776,7 +1829,17 @@ function parkCurrentAsActive(flashUI = false) {
   setTimeout(() => {
     try {
       const rec = activeLocations.get(id);
-      if (rec) rec.title = el.getTitle?.() || '';
+      if (rec) {
+        const nowURL = (el.getURL?.() || '').trim();
+        if (isAIChatURL(nowURL)) {
+          // Keep or refresh the AI title from initial query; don't overwrite with generic title
+          const aiTitle = getAIChatInitialQueryFromWebView(el) || rec.title || '';
+          rec.title = aiTitle;
+        } else {
+          // Non-AI: use the page title
+          rec.title = el.getTitle?.() || rec.title || '';
+        }
+      }
       persistActiveSessions().catch(() => {});
     } catch {}
   }, 0);
@@ -1857,17 +1920,23 @@ function getActiveSuggestions(q) {
     // Skip the currently active/visible location
     if (rec.id === currentActiveId) continue;
     
-    // Always show the CURRENT URL as the label
     const currentURL = rec.webview?.getURL?.() || rec.url || '';
-    const label = currentURL;
-    // Fetch CURRENT title from webview to avoid stale titles; fallback to hostname
+    const ai = isAIChatURL(currentURL);
     let title = '';
-    try { title = rec.webview?.getTitle?.() || rec.title || ''; } catch { title = rec.title || ''; }
-    if (!title) {
-      try { title = new URL(currentURL).hostname || ''; } catch {}
+    if (ai) {
+      // Prefer our curated title (initial query) over the page title
+      title = rec.title || getAIChatInitialQueryFromWebView(rec.webview) || '';
+    } else {
+      // Non-AI: fetch live title; fallback to stored title or hostname
+      try { title = rec.webview?.getTitle?.() || rec.title || ''; } catch { title = rec.title || ''; }
+      if (!title) { try { title = new URL(currentURL).hostname || ''; } catch {} }
     }
-    const detail = title;
-    const matchBase = `${label} ${detail}`.trim();
+    // Label/detail rules:
+    // - AI chat: label = title (initial query), detail hidden
+    // - Normal: label = URL, detail = title
+    const label = ai ? (title || '(Chat)') : currentURL;
+    const detail = ai ? '' : title;
+    const matchBase = ai ? (title || '') : `${label} ${detail}`.trim();
     const m = fuzzyMatch(query, matchBase);
     if (query && m.score < 0) continue;
     items.push({ kind: 'active', id: rec.id, label, detail, score: query ? m.score : 9999, matches: m.indices });
