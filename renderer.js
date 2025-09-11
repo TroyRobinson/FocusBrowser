@@ -3954,6 +3954,25 @@ activeCountBubble?.addEventListener('click', (e) => {
 
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
+    // Cmd+Enter: while on an AI chat thread with "Continue the conversation...", start a fresh chat with the typed message
+    try {
+      const v = getVisibleWebView();
+      const url = v?.getURL?.() || '';
+      const onAIChat = isAIChatURL(url);
+      const isContinueMode = !!(input && typeof input.placeholder === 'string' && input.placeholder.startsWith('Continue the conversation'));
+      if ((e.metaKey || e.ctrlKey) && onAIChat && isContinueMode) {
+        e.preventDefault();
+        const q = String(input?.value || '').trim();
+        if (q) {
+          // Drop existing conversation mapping so this becomes a brand-new thread
+          try { if (v) conversationByView.delete(v); } catch {}
+          currentConversation = null;
+          handleAIChat(q, { shiftKey: false });
+        }
+        return;
+      }
+    } catch {}
+
     debugLog('keydown Enter', { shift: !!e.shiftKey, suggSelected });
     e.preventDefault();
     
