@@ -2543,6 +2543,14 @@ function renderSuggestions(forceShowActive = false) {
   const inputFocused = document.activeElement === input;
   const list = loadWhitelist();
   const candidates = Array.from(new Set(list.map((it) => it?.domain).filter(Boolean)));
+  
+  // Detect if the visible view is an AI Chat thread page
+  let inAIChat = false;
+  try {
+    const v = getVisibleWebView?.();
+    const url = v?.getURL?.() || '';
+    inAIChat = isAIChatURL(url);
+  } catch {}
 
   let items = [];
   if (!q || forceShowActive) {
@@ -2557,24 +2565,39 @@ function renderSuggestions(forceShowActive = false) {
       .slice(0, 8);
     const active = getActiveSuggestions(q).slice(0, 6);
 
-    // Show the custom submit (typed) option when the user is typing a URL-like input:
-    // - pressed space after a term (trailing space), e.g. "word "
-    // - contains a period (typing a domain), e.g. "google.com", "example."
-    const showTyped = raw.endsWith(' ') || raw.includes('.');
-
-    items = [
-      ...active,
-      ...(showTyped ? [{ kind: 'typed', value: q, label: q, typed: true }] : []),
-      ...scored.map((it) => ({ kind: 'domain', value: it.c, label: it.c, matches: it.m.indices }))
-    ];
+    // In AI chat thread mode: always surface the custom typed terms first,
+    // followed by fuzzy domain matches, then any active suggestions.
+    if (inAIChat) {
+      items = [
+        { kind: 'typed', value: q, label: q, typed: true },
+        ...scored.map((it) => ({ kind: 'domain', value: it.c, label: it.c, matches: it.m.indices })),
+        ...active
+      ];
+    } else {
+      // Default behavior: show active, then typed option (only when URL-like typing), then fuzzy matches
+      // Show the custom submit (typed) option when the user is typing a URL-like input:
+      // - pressed space after a term (trailing space), e.g. "word "
+      // - contains a period (typing a domain), e.g. "google.com", "example."
+      const showTyped = raw.endsWith(' ') || raw.includes('.');
+      items = [
+        ...active,
+        ...(showTyped ? [{ kind: 'typed', value: q, label: q, typed: true }] : []),
+        ...scored.map((it) => ({ kind: 'domain', value: it.c, label: it.c, matches: it.m.indices }))
+      ];
+    }
   }
   suggItems = items;
   
   // When a typed option is present, prioritize it for selection
   let initialSelection = 0;
   if (items.length > 0) {
-    const typedIndex = items.findIndex(item => item.typed);
-    initialSelection = typedIndex >= 0 ? typedIndex : 0;
+    if (inAIChat) {
+      // In AI chat mode, default to the custom typed option (index 0 by construction)
+      initialSelection = 0;
+    } else {
+      const typedIndex = items.findIndex(item => item.typed);
+      initialSelection = typedIndex >= 0 ? typedIndex : 0;
+    }
   } else {
     initialSelection = -1;
   }
