@@ -1880,6 +1880,46 @@ async function performAIChat(query, conversationHistory = []) {
 }
 
 function generateAIChatHTML(conversation, isLoading = false) {
+  // Basic HTML escaper to prevent injection
+  function escapeHTML(str) {
+    try {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    } catch {
+      return '';
+    }
+  }
+
+  function nl2br(str) {
+    return String(str).replace(/(?:\r\n|\n\r|\n)/g, '<br>');
+  }
+
+  // Minimal, safe Markdown renderer for bold/italic/links/code
+  function renderMarkdown(md) {
+    try {
+      let html = escapeHTML(md);
+      // Inline code
+      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+      // Links [text](https://...)
+      // Use same-tab navigation so whitelist enforcement runs via will-navigate
+      html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
+      // Bold **text**
+      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      // Italic *text* or _text_
+      html = html.replace(/(^|[^*])\*([^\s*][^*]*?)\*(?!\*)/g, '$1<em>$2</em>');
+      html = html.replace(/_([^\s_][^_]*)_/g, '<em>$1</em>');
+      // Line breaks
+      html = nl2br(html);
+      return html;
+    } catch {
+      return escapeHTML(md);
+    }
+  }
+
   const messages = conversation.messages || [];
   const lastMessage = messages[messages.length - 1];
   const query = messages.find(m => m.role === 'user')?.content || '';
@@ -1904,16 +1944,16 @@ function generateAIChatHTML(conversation, isLoading = false) {
       conversationHTML += `
         <div class="message user-message">
           <div class="message-label">You</div>
-          <div class="message-text">${msg.content}</div>
+          <div class="message-text">${nl2br(escapeHTML(msg.content))}</div>
         </div>
       `;
     } else if (msg.role === 'assistant') {
       const isError = msg.isError;
-      const modelInfo = msg.model ? `<span class="model-info">${msg.model}</span>` : '';
+      const modelInfo = msg.model ? `<span class=\"model-info\">${escapeHTML(msg.model)}</span>` : '';
       conversationHTML += `
         <div class="message assistant-message ${isError ? 'error' : ''}">
           <div class="message-label">Assistant${modelInfo}</div>
-          <div class="message-text">${msg.content}</div>
+          <div class="message-text">${renderMarkdown(msg.content)}</div>
         </div>
       `;
     }
@@ -1925,7 +1965,7 @@ function generateAIChatHTML(conversation, isLoading = false) {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>AI Chat - ${query}</title>
+        <title>AI Chat - ${escapeHTML(query)}</title>
         <style>
             /* Sleek dark scrollbars */
             * {
@@ -1980,7 +2020,7 @@ function generateAIChatHTML(conversation, isLoading = false) {
                 background: #2a2a2a;
                 padding: 16px 20px;
                 border-radius: 12px;
-                border-left: 4px solidrgb(0, 163, 204);
+                border-left: 4px solid rgb(0, 163, 204);
             }
             .assistant-message.error {
                 border-left-color: #ff4444;
@@ -2006,6 +2046,17 @@ function generateAIChatHTML(conversation, isLoading = false) {
             .message-text {
                 font-size: 16px;
                 font-weight: 400;
+            }
+            .message-text a {
+                color: #4ea3ff;
+                text-decoration: underline;
+            }
+            .message-text code {
+                background: #1f2430;
+                padding: 0.15em 0.35em;
+                border-radius: 4px;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+                font-size: 0.95em;
             }
             .user-message .message-text {
                 font-weight: 500;
