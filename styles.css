@@ -127,6 +127,13 @@ body {
 }
 .removal-count-bubble:hover { background: #922d31; }
 
+/* Slow pulse to indicate a pending action */
+@keyframes pulse-red {
+  from { box-shadow: 0 0 0 0 rgba(178,58,63,0.0); filter: brightness(1); }
+  to   { box-shadow: 0 0 0 4px rgba(178,58,63,0.25); filter: brightness(1.1); }
+}
+.removal-count-bubble.pending { animation: pulse-red 1.5s ease-in-out infinite alternate; }
+
 .address-input:focus {
   border-color: var(--accent);
 }
@@ -617,6 +624,7 @@ webview#webview {
   cursor: pointer;
 }
 .domain-list .removal-badge:hover { background: #922d31; }
+.domain-list .removal-badge.pending { animation: pulse-red 1.5s ease-in-out infinite alternate; }
 
 .domain-list .countdown {
   color: var(--muted);

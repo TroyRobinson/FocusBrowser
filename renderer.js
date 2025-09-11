@@ -972,20 +972,19 @@ function renderWhitelist() {
         e.stopPropagation();
         try {
           const domain = getRegistrableDomain(item.domain) || item.domain;
-          await setDomainRemovalRules(domain, []);
-          // For each webview on this domain, disconnect and reload
-          for (const w of getAllWebViews()) {
-            try {
-              const u = w?.getURL?.() || '';
-              if (!u) continue;
-              const h = new URL(u).hostname.toLowerCase();
-              const d = getRegistrableDomain(h) || h;
-              if (d !== domain) continue;
-              await w.executeJavaScript(`(() => { try { const k='__FB_REMOVE_RULES__'; const s=window[k]; if (s && s.observer && s.observer.disconnect) s.observer.disconnect(); window[k]=null; } catch {} return true; })();`, true).catch(() => {});
-              w.reload?.();
-            } catch {}
+          const existing = await getDomainRemovalRules(domain);
+          const cnt = Array.isArray(existing) ? existing.length : 0;
+          if (cnt <= 0) return;
+          const delayMin = getDelayMinutes();
+          if (delayMin <= 0) {
+            await clearDomainRemovalRulesImmediate(domain);
+          } else {
+            const activateAt = Date.now() + delayMin * 60 * 1000;
+            await scheduleRemovalForDomain(domain, activateAt);
+            removalBadge.classList.add('pending');
+            const label = fmtRemaining(Math.max(0, activateAt - Date.now())) || `${delayMin}:00`;
+            showBanner(`In ${label} the deletion rules will be removed`, '', 4000);
           }
-          showBanner(`Restored removed elements for ${domain}`, '', 2600);
         } catch {}
         try { updateRemovalCountBubble(); } catch {}
         renderWhitelist();
@@ -1053,6 +1052,14 @@ function renderWhitelist() {
             removalBadge.title = `Removed elements on ${domain} — click to restore`;
           } else {
             removalBadge.classList.add('hidden');
+          }
+          // Mark pending state
+          const at = await getRemovalPendingAt(domain);
+          if (at && at > Date.now()) {
+            removalBadge.classList.add('pending');
+            removalBadge.title = `Removing in ${fmtRemaining(Math.max(0, at - Date.now()))}`;
+          } else {
+            removalBadge.classList.remove('pending');
           }
         } catch {}
       })();
@@ -1214,6 +1221,73 @@ async function setDomainRemovalRules(domain, rules) {
   } catch {}
 }
 
+// Pending deletion of rules per domain
+const REMOVE_PENDING_KEY = 'removeRules_pending_map';
+async function getRemovalPendingMap() {
+  try {
+    const raw = await safeGetItem?.(REMOVE_PENDING_KEY);
+    if (raw) {
+      try { const obj = JSON.parse(raw); if (obj && typeof obj === 'object') return obj; } catch {}
+    }
+  } catch {}
+  return {};
+}
+async function setRemovalPendingMap(map) {
+  try { await safeSetItem?.(REMOVE_PENDING_KEY, JSON.stringify(map || {})); } catch {}
+}
+async function getRemovalPendingAt(domain) {
+  try { const m = await getRemovalPendingMap(); const t = Number(m[domain] || 0); return Number.isFinite(t) ? t : 0; } catch { return 0; }
+}
+async function scheduleRemovalForDomain(domain, activateAt) {
+  try { const m = await getRemovalPendingMap(); m[domain] = activateAt; await setRemovalPendingMap(m); } catch {}
+}
+async function clearScheduledRemovalForDomain(domain) {
+  try { const m = await getRemovalPendingMap(); delete m[domain]; await setRemovalPendingMap(m); } catch {}
+}
+
+let removalPendingInterval = null;
+function startRemovalPendingTimer() {
+  if (removalPendingInterval) return;
+  removalPendingInterval = setInterval(async () => {
+    try {
+      const m = await getRemovalPendingMap();
+      const now = Date.now();
+      let changed = false;
+      for (const [domain, at] of Object.entries(m)) {
+        const ts = Number(at || 0);
+        if (ts && now >= ts) {
+          await clearDomainRemovalRulesImmediate(domain, { silent: false });
+          delete m[domain];
+          changed = true;
+        }
+      }
+      if (changed) {
+        await setRemovalPendingMap(m);
+        try { updateRemovalCountBubble(); } catch {}
+        if (settingsView && !settingsView.classList.contains('hidden')) renderWhitelist();
+      }
+    } catch {}
+  }, 1000);
+}
+
+async function clearDomainRemovalRulesImmediate(domain, { silent = false } = {}) {
+  try {
+    await setDomainRemovalRules(domain, []);
+    for (const w of getAllWebViews()) {
+      try {
+        const u = w?.getURL?.() || '';
+        if (!u) continue;
+        const h = new URL(u).hostname.toLowerCase();
+        const d = getRegistrableDomain(h) || h;
+        if (d !== domain) continue;
+        await w.executeJavaScript(`(() => { try { const k='__FB_REMOVE_RULES__'; const s=window[k]; if (s && s.observer && s.observer.disconnect) s.observer.disconnect(); window[k]=null; } catch {} return true; })();`, true).catch(() => {});
+        w.reload?.();
+      } catch {}
+    }
+    if (!silent) showBanner(`Restored removed elements for ${domain}`, '', 2600);
+  } catch {}
+}
+
 // Update the red removal rules bubble based on current domain
 async function updateRemovalCountBubble() {
   try {
@@ -1227,7 +1301,14 @@ async function updateRemovalCountBubble() {
     const count = Array.isArray(rules) ? rules.length : 0;
     if (count > 0) {
       removalCountBubble.textContent = String(count);
-      removalCountBubble.title = `Removed elements on ${domain} — click to restore`;
+      const at = await getRemovalPendingAt(domain);
+      if (at && at > Date.now()) {
+        removalCountBubble.classList.add('pending');
+        removalCountBubble.title = `Removing in ${fmtRemaining(Math.max(0, at - Date.now()))}`;
+      } else {
+        removalCountBubble.classList.remove('pending');
+        removalCountBubble.title = `Removed elements on ${domain} — click to restore`;
+      }
       removalCountBubble.classList.remove('hidden');
     } else {
       removalCountBubble.classList.add('hidden');
@@ -1244,19 +1325,19 @@ removalCountBubble?.addEventListener('click', async (e) => {
     if (!url || url === 'about:blank') return;
     const host = new URL(url).hostname.toLowerCase();
     const domain = getRegistrableDomain(host) || host;
-    await setDomainRemovalRules(domain, []);
-    for (const w of getAllWebViews()) {
-      try {
-        const u = w?.getURL?.() || '';
-        if (!u) continue;
-        const h = new URL(u).hostname.toLowerCase();
-        const d = getRegistrableDomain(h) || h;
-        if (d !== domain) continue;
-        await w.executeJavaScript(`(() => { try { const k='__FB_REMOVE_RULES__'; const s=window[k]; if (s && s.observer && s.observer.disconnect) s.observer.disconnect(); window[k]=null; } catch {} return true; })();`, true).catch(() => {});
-        w.reload?.();
-      } catch {}
+    const rules = await getDomainRemovalRules(domain);
+    const count = Array.isArray(rules) ? rules.length : 0;
+    if (count <= 0) return;
+    const delayMin = getDelayMinutes();
+    if (delayMin <= 0) {
+      await clearDomainRemovalRulesImmediate(domain);
+    } else {
+      const activateAt = Date.now() + delayMin * 60 * 1000;
+      await scheduleRemovalForDomain(domain, activateAt);
+      removalCountBubble.classList.add('pending');
+      const label = fmtRemaining(Math.max(0, activateAt - Date.now())) || `${delayMin}:00`;
+      showBanner(`In ${label} the deletion rules will be removed`, '', 4000);
     }
-    showBanner(`Restored removed elements for ${domain}`, '', 2600);
   } catch {}
   updateRemovalCountBubble();
 });
@@ -3650,6 +3731,9 @@ ensureAddressBarFocused();
 // Retry focus a couple times with delays to ensure suggestions appear
 setTimeout(ensureAddressBarFocused, 100);
 setTimeout(ensureAddressBarFocused, 300);
+
+// Start timer to process pending deletion-rule removals
+try { startRemovalPendingTimer(); } catch {}
 
 
 // Keyboard shortcuts from main process
