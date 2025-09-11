@@ -595,12 +595,22 @@ function getDelayMinutes() {
 async function schedulePendingDelay(newMinutes) {
   const effective = getDelayMinutes();
   const next = sanitizeDelay(newMinutes);
-  if (effective === 0) {
-    // Immediate effect, no countdown
+
+  // If raising the delay, apply immediately (no waiting)
+  if (next > effective) {
     await setEffectiveDelayMinutes(next);
     await clearPendingDelay();
     return { immediate: true };
   }
+
+  // If equal, treat as no-op
+  if (next === effective) {
+    await clearPendingDelay();
+    return { immediate: true };
+  }
+
+  // If lowering the delay, schedule it to take effect after the current
+  // effective delay countdown completes.
   const activateAt = Date.now() + effective * 60 * 1000;
   await safeSetItem(DELAY_PENDING_MIN_KEY, String(next));
   await safeSetItem(DELAY_PENDING_AT_KEY, String(activateAt));
