@@ -1391,10 +1391,101 @@ function getAllWebViews() {
 
 // getVisibleWebView is defined later in the file; rely on that definition
 
+// Check if the site already has dark mode styles
+async function checkSiteHasDarkMode(view) {
+  try {
+    if (!view || typeof view.executeJavaScript !== 'function') return false;
+    
+    const js = `(() => {
+      try {
+        // Check common dark mode indicators
+        const html = document.documentElement || document.body;
+        const body = document.body;
+        
+        // Get computed styles for body and html
+        const htmlStyle = getComputedStyle(html);
+        const bodyStyle = body ? getComputedStyle(body) : htmlStyle;
+        
+        // Check background colors (dark if closer to black than white)
+        function isDarkColor(color) {
+          if (!color || color === 'transparent' || color === 'rgba(0, 0, 0, 0)') return false;
+          
+          // Parse RGB/RGBA values
+          const match = color.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+          if (!match) return false;
+          
+          const r = parseInt(match[1]);
+          const g = parseInt(match[2]);  
+          const b = parseInt(match[3]);
+          
+          // Calculate luminance (closer to 0 = darker)
+          const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+          return luminance < 0.5; // Dark if luminance less than 50%
+        }
+        
+        // Check HTML and body background colors
+        const htmlBg = htmlStyle.backgroundColor;
+        const bodyBg = bodyStyle.backgroundColor;
+        
+        if (isDarkColor(htmlBg) || isDarkColor(bodyBg)) {
+          return true;
+        }
+        
+        // Check for dark mode class names
+        const classList = html.className + ' ' + (body ? body.className : '');
+        const darkModeKeywords = ['dark', 'dark-mode', 'dark-theme', 'night', 'night-mode'];
+        const hasDarkClass = darkModeKeywords.some(keyword => 
+          classList.toLowerCase().includes(keyword)
+        );
+        
+        if (hasDarkClass) return true;
+        
+        // Check for CSS custom properties that indicate dark mode
+        const htmlCustomProps = htmlStyle.getPropertyValue('--background-color') || 
+                               htmlStyle.getPropertyValue('--bg-color') ||
+                               htmlStyle.getPropertyValue('--background') ||
+                               htmlStyle.getPropertyValue('--color-background');
+        
+        if (htmlCustomProps && isDarkColor(htmlCustomProps)) return true;
+        
+        // Check color scheme preference
+        const colorScheme = htmlStyle.colorScheme || bodyStyle.colorScheme;
+        if (colorScheme && colorScheme.includes('dark')) return true;
+        
+        // Check for meta theme-color (often dark on dark sites)
+        const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+        if (metaThemeColor) {
+          const themeColor = metaThemeColor.getAttribute('content');
+          if (themeColor && isDarkColor(themeColor)) return true;
+        }
+        
+        return false;
+      } catch (e) {
+        return false;
+      }
+    })();`;
+    
+    const result = await view.executeJavaScript(js, true).catch(() => false);
+    return !!result;
+  } catch {
+    return false;
+  }
+}
+
 // Apply/remove dark mode CSS inside a webview
 async function setWebViewDarkMode(view, enable) {
   try {
     if (!view) return;
+    
+    // If enabling dark mode, first check if the site already has dark mode
+    if (enable) {
+      const hasDarkMode = await checkSiteHasDarkMode(view);
+      if (hasDarkMode) {
+        try { debugLog('dark-mode skipped - site already dark', { id: viewId(view) }); } catch {}
+        return;
+      }
+    }
+    
     const cssText = 'html { filter: invert(1) hue-rotate(180deg) !important; background: #111 !important; }\n'
                  + 'img, picture, video, canvas, iframe, svg, [style*="background-image"] { filter: invert(1) hue-rotate(180deg) !important; }';
 
