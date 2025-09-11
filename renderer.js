@@ -1136,6 +1136,37 @@ settingsBtn?.addEventListener('click', () => {
 // Element selection mode: Cmd/Ctrl+N toggles a hover highlighter inside the page
 let elementSelectMode = false;
 const ELEMENT_SELECT_COLOR = '#4f7cff'; // brand accent from styles.css
+let elementSelectPollTimer = null;
+
+// Domain removal rules storage helpers (persist + local fallback)
+async function getDomainRemovalRules(domain) {
+  try {
+    const key = `removeRules:${domain}`;
+    // Prefer safeGetItem which also consults localStorage
+    let raw = await safeGetItem?.(key);
+    if (raw && typeof raw === 'string') {
+      try { const arr = JSON.parse(raw); if (Array.isArray(arr)) return arr; } catch {}
+    }
+    // Migration: older entries may be stored directly via window.storage as an array
+    const direct = await window.storage?.get?.(key);
+    if (Array.isArray(direct)) {
+      try { await safeSetItem?.(key, JSON.stringify(direct)); } catch {}
+      return direct;
+    }
+    if (typeof direct === 'string') {
+      try { const arr = JSON.parse(direct); if (Array.isArray(arr)) return arr; } catch {}
+    }
+  } catch {}
+  return [];
+}
+
+async function setDomainRemovalRules(domain, rules) {
+  try {
+    const key = `removeRules:${domain}`;
+    const payload = JSON.stringify(Array.isArray(rules) ? rules : []);
+    await safeSetItem?.(key, payload);
+  } catch {}
+}
 
 function getAllWebViews() {
   try { return Array.from(document.querySelectorAll('webview')); } catch { return []; }
@@ -1165,6 +1196,7 @@ async function setWebViewHoverHighlighter(view, enable) {
           if (st.onBlur) g.removeEventListener('blur', st.onBlur, true);
           if (st.onScroll) g.removeEventListener('scroll', st.onScroll, true);
           if (st.onResize) g.removeEventListener('resize', st.onResize, true);
+          if (st.onClick) document.removeEventListener('click', st.onClick, true);
           g[KEY] = null;
         } catch {}
       }
@@ -1172,9 +1204,78 @@ async function setWebViewHoverHighlighter(view, enable) {
       cleanup();
       const styleEl = document.createElement('style');
       const cls = '__fb_hh_target__';
-      styleEl.textContent = '.' + cls + '{outline:2px solid ${ELEMENT_SELECT_COLOR} !important; outline-offset:-2px !important;}';
+      styleEl.textContent = '.' + cls + '{outline:2px solid ${ELEMENT_SELECT_COLOR} !important; outline-offset:-2px !important; cursor: crosshair !important;}';
       (document.head || document.documentElement || document.body).appendChild(styleEl);
       let last = null, lastX = 0, lastY = 0;
+      const ce = (s) => {
+        try { return (window.CSS && window.CSS.escape) ? window.CSS.escape(String(s)) : String(s).replace(/([^a-zA-Z0-9_-])/g, '\\$1'); } catch { return String(s); }
+      };
+      const looksHashed = (s) => /[a-f0-9]{6,}/i.test(s) || /\d{4,}/.test(s);
+      const stableClasses = (el) => Array
+        .from(el.classList || [])
+        .filter(c => c && c.length <= 32 && !looksHashed(c) && c !== '__fb_hh_target__')
+        .slice(0,3);
+      const tokenFor = (el) => {
+        try {
+          if (!el || !el.tagName) return null;
+          // Prefer ID if present
+          if (el.id && el.id.length < 128 && !looksHashed(el.id)) return '#' + ce(el.id);
+          const tag = String(el.tagName || '').toLowerCase();
+          // Useful attributes
+          const role = el.getAttribute && el.getAttribute('role');
+          const aria = el.getAttribute && el.getAttribute('aria-label');
+          const dtid = el.getAttribute && (el.getAttribute('data-testid') || el.getAttribute('data-test') || el.getAttribute('data-component'));
+          if (role) return tag + '[role="' + ce(role) + '"]';
+          if (aria && aria.length <= 64) return tag + '[aria-label="' + ce(aria) + '"]';
+          if (dtid) return tag + '[data-testid="' + ce(dtid) + '"]';
+          const classes = stableClasses(el);
+          if (classes.length) return tag + classes.map(c => '.' + ce(c)).join('');
+          return tag;
+        } catch { return null; }
+      };
+      const buildSelector = (el) => {
+        try {
+          if (!el) return null;
+          const parts = [];
+          let cur = el;
+          let depth = 0;
+          while (cur && depth < 4) {
+            const tok = tokenFor(cur);
+            if (!tok) break;
+            // If token starts with #, use it as an anchor and stop climbing further
+            parts.unshift(tok);
+            if (tok[0] === '#') break;
+            cur = cur.parentElement;
+            depth++;
+          }
+          if (!parts.length) return null;
+          // If the last token is just a bare tag (too generic), try to specialize with :nth-of-type
+          const lastTok = parts[parts.length - 1];
+          if (!lastTok || (lastTok && /^[a-z0-9-]+$/.test(lastTok))) {
+            try {
+              const p = el.parentElement;
+              if (p) {
+                const tag = el.tagName.toLowerCase();
+                const sibs = Array.from(p.children).filter((ch) => (ch.tagName || '').toLowerCase() === tag);
+                const idx = sibs.indexOf(el);
+                if (idx >= 0) parts[parts.length - 1] = (lastTok || tag) + ':nth-of-type(' + (idx + 1) + ')';
+              }
+            } catch {}
+          }
+          return parts.join(' > ');
+        } catch { return null; }
+      };
+      const textSignature = (el) => {
+        try {
+          const tag = String(el?.tagName || '').toLowerCase();
+          let txt = String(el?.textContent || '').replace(/\s+/g, ' ').trim();
+          if (txt.length > 140) txt = txt.slice(0, 140);
+          if (!txt) return null;
+          return { kind: 'text', tag, text: txt.toLowerCase() };
+        } catch { return null; }
+      };
+      // Buffer for newly created deletion signatures consumed by host app
+      const sigs = [];
       const pick = () => {
         try {
           const el = document.elementFromPoint(lastX, lastY);
@@ -1190,15 +1291,180 @@ async function setWebViewHoverHighlighter(view, enable) {
       const onBlur = () => { if (last) last.classList.remove(cls); last = null; };
       const onScroll = () => { pick(); };
       const onResize = () => { pick(); };
+      const onClick = (e) => {
+        try {
+          // Prevent page from handling this click
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation?.();
+          const el = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+          if (!el) return;
+          // Do not remove <html> or <body>
+          if (el === document.documentElement || el === document.body) return;
+          // Compute a stable signature
+          const sel = buildSelector(el);
+          const ts = textSignature(el);
+          if (sel) { sigs.push({ kind: 'css', selector: sel }); }
+          if (ts) { sigs.push(ts); }
+          // If our highlight was on another element, clear its class
+          if (last && last !== el) { try { last.classList.remove(cls); } catch {} }
+          try { el.remove(); } catch {}
+          // After removal, clear highlight and recalc target under pointer
+          last = null; pick();
+        } catch {}
+      };
       document.addEventListener('mousemove', onMove, true);
       document.addEventListener('mouseleave', onLeave, true);
       g.addEventListener('blur', onBlur, true);
       g.addEventListener('scroll', onScroll, true);
       g.addEventListener('resize', onResize, true);
-      g[KEY] = { styleEl, cls, onMove, onLeave, onBlur, onScroll, onResize };
+      document.addEventListener('click', onClick, true);
+      g[KEY] = { styleEl, cls, onMove, onLeave, onBlur, onScroll, onResize, onClick, sigs };
       return 'enabled';
     } catch (e) { return 'error:' + (e && e.message || '') } })();`;
     await view.executeJavaScript(code, true).catch(() => {});
+  } catch {}
+}
+
+async function fetchAndPersistDeletionSigs(view) {
+  try {
+    if (!view || typeof view.executeJavaScript !== 'function') return;
+    const res = await view.executeJavaScript(`(() => { try {
+      const st = window.__FB_HOVER_HIGHLIGHT__;
+      const host = location.hostname || '';
+      const out = Array.isArray(st?.sigs) ? st.sigs.slice() : [];
+      if (Array.isArray(st?.sigs)) st.sigs.length = 0;
+      return { host, sigs: out };
+    } catch { return { host: '', sigs: [] }; } })();`, true).catch(() => null);
+    if (!res || !Array.isArray(res.sigs) || !res.sigs.length) return;
+    const rawHost = String(res.host || '').toLowerCase();
+    const domain = getRegistrableDomain(rawHost) || rawHost;
+    if (!domain) return;
+    const cur = await getDomainRemovalRules(domain);
+    const normalize = (r) => {
+      if (!r) return null;
+      if (typeof r === 'string') return { kind: 'css', selector: r };
+      if (typeof r === 'object' && r.kind) return r;
+      return null;
+    };
+    const now = Array.isArray(cur) ? cur.map(normalize).filter(Boolean) : [];
+    const seen = new Set(now.map((r) => JSON.stringify(r)));
+    let added = 0;
+    for (const s of res.sigs) {
+      const n = normalize(s);
+      if (!n) continue;
+      const keyStr = JSON.stringify(n);
+      if (!seen.has(keyStr)) { seen.add(keyStr); now.push(n); added++; }
+    }
+    if (added > 0) {
+      debugLog('persist-removal', { domain, added, total: now.length });
+      const arr = now;
+      await setDomainRemovalRules(domain, arr);
+      // Apply immediately to all matching views
+      for (const v of getAllWebViews()) {
+        try {
+          const url = viewURL(v);
+          if (!url) continue;
+          const h = new URL(url).hostname.toLowerCase();
+          const d = getRegistrableDomain(h) || h;
+          if (d === domain) await setWebViewDomainRemovalRules(v, arr);
+        } catch {}
+      }
+      showBanner('Element removed. Will hide similar on this domain.', '', 2800);
+    }
+  } catch {}
+}
+
+async function setWebViewDomainRemovalRules(view, selectors) {
+  try {
+    if (!view || typeof view.executeJavaScript !== 'function') return;
+    const payload = JSON.stringify(Array.isArray(selectors) ? selectors : []);
+    const js = `(() => { try {
+      const KEY='__FB_REMOVE_RULES__';
+      const g=window;
+      try { const prev=g[KEY]; if (prev && prev.observer && prev.observer.disconnect) prev.observer.disconnect(); } catch {}
+      const rules = ${payload};
+      const cssSelectors = [];
+      const textRules = [];
+      for (let r of (rules||[])) {
+        if (!r) continue;
+        if (typeof r === 'string') {
+          // Sanitize out our transient highlight class
+          try { r = r.replace(/\.__fb_hh_target__/g, ''); } catch {}
+          cssSelectors.push(r);
+        }
+        else if (typeof r === 'object') {
+          if (r.kind === 'css' && r.selector) {
+            let s = String(r.selector);
+            try { s = s.replace(/\.__fb_hh_target__/g, ''); } catch {}
+            cssSelectors.push(s);
+          }
+          else if (r.kind === 'text' && r.text) textRules.push({ tag: (r.tag||'*'), text: String(r.text).toLowerCase() });
+        }
+      }
+      let removed = 0;
+      const removeNow = () => {
+        try {
+          // CSS selectors first
+          for (const origSel of cssSelectors) {
+            try {
+              let sel = origSel;
+              let nodes = document.querySelectorAll(sel);
+              if (!nodes || nodes.length === 0) {
+                // Degrade: drop :nth-of-type and class tokens
+                try { sel = sel.replace(/:nth-of-type\(\d+\)/g, ''); } catch {}
+                try { sel = sel.replace(/\.[_a-zA-Z0-9-]+/g, ''); } catch {}
+                nodes = document.querySelectorAll(sel);
+              }
+              if ((!nodes || nodes.length === 0) && sel.includes('>')) {
+                // Degrade further to last segment only (most specific part)
+                try {
+                  const last = sel.split('>').pop().trim();
+                  if (last) nodes = document.querySelectorAll(last);
+                } catch {}
+              }
+              for (const n of nodes) {
+                if (n && n !== document.documentElement && n !== document.body && n.remove) { n.remove(); removed++; }
+              }
+            } catch {}
+          }
+          // Text-based rules
+          for (const r of textRules) {
+            try {
+              const nodes = document.querySelectorAll(r.tag || '*');
+              for (const n of nodes) {
+                try {
+                  const t = String(n.textContent || '').replace(/\s+/g,' ').trim().toLowerCase();
+                  if (t && t.indexOf(r.text) !== -1) { if (n !== document.documentElement && n !== document.body && n.remove) { n.remove(); removed++; } }
+                } catch {}
+              }
+            } catch {}
+          }
+        } catch {}
+      };
+      removeNow();
+      let obs = null;
+      try {
+        obs = new MutationObserver(() => { removeNow(); });
+        obs.observe(document.documentElement || document.body, { childList:true, subtree:true });
+      } catch {}
+      g[KEY] = { rules, observer: obs };
+      return {
+        rulesCount: (cssSelectors.length + textRules.length),
+        removed,
+        cssSelectorsLen: cssSelectors.length,
+        textRulesLen: textRules.length,
+        firstCss: cssSelectors.length ? cssSelectors[0] : null,
+        firstText: textRules.length ? textRules[0] : null
+      };
+    } catch { return false; } })();`;
+    const res = await view.executeJavaScript(js, true).catch(() => null);
+    try {
+      const url = viewURL(view) || '';
+      const h = url ? new URL(url).hostname.toLowerCase() : '';
+      const domain = h ? (getRegistrableDomain(h) || h) : '';
+      debugLog('apply-removal-exec', { domain, stats: res || null });
+    } catch {}
   } catch {}
 }
 
@@ -1208,17 +1474,23 @@ async function applySelectionMode(en) {
     if (elementSelectMode) {
       const v = getVisibleWebView();
       await setWebViewHoverHighlighter(v, true);
+      // Start polling for newly created deletion signatures from the page
+      if (elementSelectPollTimer) { clearInterval(elementSelectPollTimer); elementSelectPollTimer = null; }
+      elementSelectPollTimer = setInterval(() => { try { const vv = getVisibleWebView(); fetchAndPersistDeletionSigs(vv); } catch {} }, 600);
       // Show a one-time hint near the address bar
       try {
-        const seen = await window.storage?.get?.('seenElementSelectHint');
+        const seen = await safeGetItem?.('seenElementSelectHint');
         if (!seen) {
           showBanner('Selection mode on — press Esc to exit', '', 4000);
-          await window.storage?.set?.('seenElementSelectHint', true);
+          await safeSetItem?.('seenElementSelectHint', 'true');
         }
       } catch {}
     } else {
       const views = getAllWebViews();
+      // Before disabling, flush any pending signatures immediately
+      try { const v = getVisibleWebView(); await fetchAndPersistDeletionSigs(v); } catch {}
       await Promise.all(views.map((v) => setWebViewHoverHighlighter(v, false)));
+      if (elementSelectPollTimer) { clearInterval(elementSelectPollTimer); elementSelectPollTimer = null; }
     }
   } catch {}
 }
@@ -1854,6 +2126,18 @@ function wireWebView(el) {
     finishLoadingBar();
     // Re-apply hover highlighter if selection mode is active and this view is visible
     try { if (elementSelectMode && el === getVisibleWebView()) { setWebViewHoverHighlighter(el, true); } } catch {}
+    // Apply any persisted removal rules for this domain
+    (async () => {
+      try {
+        const url = el.getURL?.() || '';
+        if (!url) return;
+        const h = new URL(url).hostname.toLowerCase();
+        const domain = getRegistrableDomain(h) || h;
+        const rules = await getDomainRemovalRules(domain);
+        debugLog('apply-removal-rules', { domain, count: Array.isArray(rules) ? rules.length : 0, sample: Array.isArray(rules) && rules.length ? JSON.stringify(rules[0]).slice(0,200) : null });
+        if (Array.isArray(rules) && rules.length) await setWebViewDomainRemovalRules(el, rules);
+      } catch {}
+    })();
   });
 
   // Track page title changes so suggestions stay fresh
@@ -1908,6 +2192,17 @@ function wireWebView(el) {
       updateRefreshButtonUI();
       finishLoadingBar();
     }
+    // Ensure domain removal rules run after full load as well
+    (async () => {
+      try {
+        const url = el.getURL?.() || '';
+        if (!url) return;
+        const h = new URL(url).hostname.toLowerCase();
+        const domain = getRegistrableDomain(h) || h;
+        const rules = await getDomainRemovalRules(domain);
+        if (Array.isArray(rules) && rules.length) await setWebViewDomainRemovalRules(el, rules);
+      } catch {}
+    })();
   });
   el.addEventListener('did-fail-load', (e) => {
     debugLog('did-fail-load', { id: viewId(el), code: e?.errorCode, url: e?.validatedURL });

@@ -27,3 +27,11 @@ Do NOT try to start the app as it causes errors currently when being started by 
 - **Ad blocking**: Optional uBlock Origin integration via @cliqz/adblocker-electron
 - **AI chat**: OpenRouter integration for AI queries (space-triggered in address bar)
 - **Keyboard shortcuts**: Cmd/Ctrl navigation, Esc for stop, focus management
+
+## Gotchas
+- **Persistent storage API**: Use `window.focusStorage` via the `safeGetItem/safeSetItem` helpers in `renderer.js`. Do not use `window.storage`. Store arrays/objects as JSON strings; the helpers mirror to `localStorage` for immediate reads.
+- **Selection-mode highlight**: Avoid overlay elements positioned by `getBoundingClientRect()`; UI chrome (toolbar) can offset coordinates. Instead, inject a CSS class on hover targets and style with `outline`.
+- **Do not persist transient classes**: The hover highlighter uses the temporary class `__fb_hh_target__`. When generating selectors for deletion persistence, exclude this class and sanitize any existing rules by stripping it before applying.
+- **Deletion persistence scope**: Save rules per registrable domain under the key `removeRules:<domain>` using `getRegistrableDomain(hostname)` (handles `example.co.uk` etc.). Apply rules on both `dom-ready` and `did-stop-loading`, and keep a `MutationObserver` active to remove matching nodes that re-appear.
+- **Selector robustness**: Prefer `#id`, then `tag[role]`, `tag[aria-label]`, `tag[data-testid]`, then `tag.stableClass`. If needed, add `:nth-of-type(n)`. Fall back to a text match rule `{ kind: 'text', tag, text }` so static headings like “Example Domain” still match.
+- **WebView execution**: Communicate with page context via `webview.executeJavaScript(...)`. If the page buffers results (e.g., collected signatures), poll from the renderer and then persist using the storage helpers.

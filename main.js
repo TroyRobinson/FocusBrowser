@@ -11,7 +11,7 @@ try {
 let mainWindow = null;
 let blocker = null;
 let adblockEnabled = true;
-let devToolsEnabled = false;
+let devToolsEnabled = true;
 const managedSessions = new Set();
 
 // Coalesce navigation events to avoid duplicates from multiple sources
