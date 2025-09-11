@@ -1618,9 +1618,16 @@ function wireWebView(el) {
         }
       }
     } catch {}
-    
+
     if (el === getVisibleWebView()) {
       updateAddressBarWithURL(e.url);
+      // When returning to AI chat, focus and select the address input
+      try {
+        if (isAIChatURL(e.url)) {
+          input?.focus?.();
+          input?.select?.();
+        }
+      } catch {}
     }
     if (e.url && isUrlAllowed(e.url)) {
       setLastAllowed(el, e.url);
@@ -1650,6 +1657,13 @@ function wireWebView(el) {
     debugLog('did-navigate-in-page', { id: viewId(el), url: e.url });
     if (el === getVisibleWebView()) {
       updateAddressBarWithURL(e.url);
+      // In-page back to AI chat: focus and select input
+      try {
+        if (isAIChatURL(e.url)) {
+          input?.focus?.();
+          input?.select?.();
+        }
+      } catch {}
     }
     if (e.url && isUrlAllowed(e.url)) {
       setLastAllowed(el, e.url);
@@ -1860,6 +1874,9 @@ function switchToWebView(el) {
         } else {
           if (input) input.placeholder = 'Your question...';
         }
+        // Focus and select the address input for quick follow-up typing
+        input?.focus?.();
+        input?.select?.();
       } catch {}
     }
   } catch {}
