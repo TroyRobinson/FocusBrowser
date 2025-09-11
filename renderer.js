@@ -165,6 +165,7 @@ const delayCountdownEl = document.getElementById('delay-countdown');
 const extensionsBtn = document.getElementById('extensions-button');
 const extensionsPopover = document.getElementById('extensions-popover');
 const uboToggle = document.getElementById('ubo-toggle');
+const darkToggle = document.getElementById('dark-toggle');
 
 // Track last successfully allowed URL per webview to keep the user in place on block
 function getLastAllowed(el) { return el?._lastAllowedURL || 'about:blank'; }
@@ -177,6 +178,8 @@ const DELAY_KEY = 'whitelist_delay_minutes';
 const DELAY_PENDING_MIN_KEY = 'whitelist_delay_pending_minutes';
 const DELAY_PENDING_AT_KEY = 'whitelist_delay_pending_activate_at';
 const SORT_MODE_KEY = 'wl_sort_mode_v1'; // 'recent' | 'abc'
+// Dark mode
+const DARK_MODE_KEY = 'dark_mode_enabled_v1';
 
 // Active sessions persistence
 const ACTIVE_SESSIONS_KEY = 'active_sessions_v1';
@@ -192,6 +195,9 @@ const LLM_PENDING_API_KEY_KEY = 'llm_pending_api_key';
 const LLM_PENDING_MODEL_KEY = 'llm_pending_model';
 const LLM_PENDING_SYSTEM_PROMPT_KEY = 'llm_pending_system_prompt';
 const LLM_PENDING_AT_KEY = 'llm_pending_activate_at';
+
+// --- Dark mode state (cached) ---
+let darkModeEnabled = false;
 
 // AI conversation tracking
 let currentConversation = null; // { messages: [], webview: element }
@@ -1385,6 +1391,102 @@ function getAllWebViews() {
 
 // getVisibleWebView is defined later in the file; rely on that definition
 
+// Apply/remove dark mode CSS inside a webview
+async function setWebViewDarkMode(view, enable) {
+  try {
+    if (!view) return;
+    const cssText = 'html { filter: invert(1) hue-rotate(180deg) !important; background: #111 !important; }\n'
+                 + 'img, picture, video, canvas, iframe, svg, [style*="background-image"] { filter: invert(1) hue-rotate(180deg) !important; }';
+
+    // Prefer insertCSS (CSP-friendly), fall back to DOM injection
+    if (enable) {
+      let inserted = false;
+      if (typeof view.insertCSS === 'function') {
+        try {
+          const key = await view.insertCSS(cssText);
+          view._darkCSSKey = (typeof key === 'string') ? key : null;
+          inserted = true;
+          try { debugLog('dark-mode insertCSS applied', { id: viewId(view) }); } catch {}
+        } catch {}
+      }
+      if (!inserted && typeof view.executeJavaScript === 'function') {
+        const js = `(() => { try {
+      const WANT = ${enable ? 'true' : 'false'};
+      const KEY = '__FB_DARK_MODE__';
+      const ID = '__fb_dark_mode_css__';
+      const g = window;
+      // Cleanup previous
+      try { const prev = g[KEY]; if (prev && prev.observer && prev.observer.disconnect) prev.observer.disconnect(); } catch {}
+      if (!WANT) {
+        try { const el = document.getElementById(ID); if (el && el.parentNode) el.parentNode.removeChild(el); } catch {}
+        g[KEY] = { enabled:false };
+        return 'disabled';
+      }
+      const css = ${JSON.stringify(cssText)};
+      let styleEl = document.getElementById(ID);
+      if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = ID;
+        styleEl.type = 'text/css';
+        styleEl.appendChild(document.createTextNode(css));
+        (document.head || document.documentElement || document.body).appendChild(styleEl);
+      } else {
+        styleEl.textContent = css;
+      }
+      let obs = null;
+      try {
+        obs = new MutationObserver(() => {
+          try {
+            if (!document.getElementById(ID)) {
+              const s = document.createElement('style');
+              s.id = ID;
+              s.type = 'text/css';
+              s.textContent = css;
+              (document.head || document.documentElement || document.body).appendChild(s);
+            }
+          } catch {}
+        });
+        obs.observe(document.documentElement || document.body, { childList: true, subtree: true });
+      } catch {}
+      g[KEY] = { enabled: true, styleEl, observer: obs };
+      return 'enabled';
+    } catch (e) { return 'error:' + (e && e.message || '') } })();`;
+        const res = await view.executeJavaScript(js, true).catch(() => null);
+        try { debugLog('dark-mode execJS applied', { id: viewId(view), res }); } catch {}
+      }
+    } else {
+      // Disable: remove insertCSS if present, and clean any DOM style
+      if (typeof view.removeInsertedCSS === 'function' && typeof view._darkCSSKey === 'string' && view._darkCSSKey) {
+        try { await view.removeInsertedCSS(view._darkCSSKey); } catch {}
+        view._darkCSSKey = null;
+        try { debugLog('dark-mode insertCSS removed', { id: viewId(view) }); } catch {}
+      }
+      if (typeof view.executeJavaScript === 'function') {
+        const js = `(() => { try {
+          const ID='__fb_dark_mode_css__';
+          const el = document.getElementById(ID);
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+          const KEY='__FB_DARK_MODE__';
+          try { const prev = window[KEY]; if (prev && prev.observer && prev.observer.disconnect) prev.observer.disconnect(); } catch {}
+          return 'removed';
+        } catch { return 'noop'; } })();`;
+        const res = await view.executeJavaScript(js, true).catch(() => null);
+        try { debugLog('dark-mode execJS removed', { id: viewId(view), res }); } catch {}
+      }
+    }
+  } catch {}
+}
+
+async function applyDarkModeToAllWebViews(enable) {
+  try {
+    const views = getAllWebViews();
+    try { debugLog('dark-mode apply all', { enable, count: views.length }); } catch {}
+    for (const v of views) {
+      try { await setWebViewDarkMode(v, enable); } catch {}
+    }
+  } catch {}
+}
+
 async function setWebViewHoverHighlighter(view, enable) {
   try {
     if (!view || typeof view.executeJavaScript !== 'function') return;
@@ -2342,6 +2444,9 @@ function wireWebView(el) {
     updateCloseButtonUI();
     updateRemovalCountBubble();
     finishLoadingBar();
+    // Apply dark mode if enabled
+    try { debugLog('dark-mode dom-ready', { id: viewId(el), enabled: !!darkModeEnabled }); } catch {}
+    try { if (darkModeEnabled) { setWebViewDarkMode(el, true); } else { setWebViewDarkMode(el, false); } } catch {}
     // Re-apply hover highlighter if selection mode is active and this view is visible
     try { if (elementSelectMode && el === getVisibleWebView()) { setWebViewHoverHighlighter(el, true); } } catch {}
     // Apply any persisted removal rules for this domain
@@ -2411,6 +2516,9 @@ function wireWebView(el) {
       finishLoadingBar();
     }
     updateRemovalCountBubble();
+    // Ensure dark mode is applied/removed after full load as well
+    try { debugLog('dark-mode did-stop-loading', { id: viewId(el), enabled: !!darkModeEnabled }); } catch {}
+    try { if (darkModeEnabled) { setWebViewDarkMode(el, true); } else { setWebViewDarkMode(el, false); } } catch {}
     // Ensure domain removal rules run after full load as well
     (async () => {
       try {
@@ -3722,16 +3830,39 @@ async function refreshUboToggle() {
   }
 }
 
+async function refreshDarkToggle() {
+  try {
+    const stored = await safeGetItem(DARK_MODE_KEY);
+    const enabled = String(stored) === 'true';
+    darkModeEnabled = enabled;
+    if (darkToggle) darkToggle.checked = enabled;
+    try { debugLog('dark-toggle refresh', { enabled }); } catch {}
+  } catch {
+    if (darkToggle) darkToggle.checked = false;
+  }
+}
+
 extensionsBtn?.addEventListener('click', async (e) => {
   e.preventDefault();
   toggleExtensionsPopover();
   await refreshUboToggle();
+  await refreshDarkToggle();
 });
 
 uboToggle?.addEventListener('change', async () => {
   try {
     const next = !!uboToggle.checked;
     await window.adblock?.setEnabled?.(next);
+  } catch {}
+});
+
+darkToggle?.addEventListener('change', async () => {
+  try {
+    const next = !!darkToggle.checked;
+    darkModeEnabled = next;
+    try { debugLog('dark-toggle change', { checked: next }); } catch {}
+    await safeSetItem(DARK_MODE_KEY, next ? 'true' : 'false');
+    await applyDarkModeToAllWebViews(next);
   } catch {}
 });
 
@@ -3747,6 +3878,8 @@ document.addEventListener('click', (e) => {
 
 // Ensure initial state is synced
 refreshUboToggle();
+// Initialize dark mode from storage and apply if needed
+(async () => { try { await refreshDarkToggle(); if (darkModeEnabled) await applyDarkModeToAllWebViews(true); } catch {} })();
 updateNavButtons();
 updateRefreshButtonUI();
 updateCloseButtonUI();
