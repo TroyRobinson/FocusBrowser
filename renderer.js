@@ -87,6 +87,7 @@ const loadingBar = document.getElementById('loading-bar');
 const suggestionsEl = document.getElementById('address-suggestions');
 const closeActiveBtn = document.getElementById('close-active-button');
 const activeCountBubble = document.getElementById('active-count-bubble');
+const removalCountBubble = document.getElementById('removal-count-bubble');
 let isLoading = false;
 let loadingInterval = null;
 let loadingProgress = 0; // 0..100
@@ -1168,6 +1169,53 @@ async function setDomainRemovalRules(domain, rules) {
   } catch {}
 }
 
+// Update the red removal rules bubble based on current domain
+async function updateRemovalCountBubble() {
+  try {
+    if (!removalCountBubble) return;
+    const v = getVisibleWebView();
+    const url = v?.getURL?.() || '';
+    if (!url || url === 'about:blank') { removalCountBubble.classList.add('hidden'); return; }
+    const host = new URL(url).hostname.toLowerCase();
+    const domain = getRegistrableDomain(host) || host;
+    const rules = await getDomainRemovalRules(domain);
+    const count = Array.isArray(rules) ? rules.length : 0;
+    if (count > 0) {
+      removalCountBubble.textContent = String(count);
+      removalCountBubble.title = `Removed elements on ${domain} — click to restore`;
+      removalCountBubble.classList.remove('hidden');
+    } else {
+      removalCountBubble.classList.add('hidden');
+    }
+  } catch { try { removalCountBubble?.classList?.add?.('hidden'); } catch {} }
+}
+
+// Click handler: clear rules for current domain and reload matching views to restore elements
+removalCountBubble?.addEventListener('click', async (e) => {
+  e.preventDefault();
+  try {
+    const v = getVisibleWebView();
+    const url = v?.getURL?.() || '';
+    if (!url || url === 'about:blank') return;
+    const host = new URL(url).hostname.toLowerCase();
+    const domain = getRegistrableDomain(host) || host;
+    await setDomainRemovalRules(domain, []);
+    for (const w of getAllWebViews()) {
+      try {
+        const u = w?.getURL?.() || '';
+        if (!u) continue;
+        const h = new URL(u).hostname.toLowerCase();
+        const d = getRegistrableDomain(h) || h;
+        if (d !== domain) continue;
+        await w.executeJavaScript(`(() => { try { const k='__FB_REMOVE_RULES__'; const s=window[k]; if (s && s.observer && s.observer.disconnect) s.observer.disconnect(); window[k]=null; } catch {} return true; })();`, true).catch(() => {});
+        w.reload?.();
+      } catch {}
+    }
+    showBanner(`Restored removed elements for ${domain}`, '', 2600);
+  } catch {}
+  updateRemovalCountBubble();
+});
+
 function getAllWebViews() {
   try { return Array.from(document.querySelectorAll('webview')); } catch { return []; }
 }
@@ -1371,6 +1419,7 @@ async function fetchAndPersistDeletionSigs(view) {
         } catch {}
       }
       showBanner('Element removed. Will hide similar on this domain.', '', 2800);
+      try { updateRemovalCountBubble(); } catch {}
     }
   } catch {}
 }
@@ -2017,6 +2066,7 @@ function wireWebView(el) {
     updateNavButtons();
     updateRefreshButtonUI();
     updateCloseButtonUI();
+    updateRemovalCountBubble();
     finishLoadingBar();
   });
   el.addEventListener('did-navigate-in-page', (e) => {
@@ -2065,6 +2115,7 @@ function wireWebView(el) {
     updateNavButtons();
     updateRefreshButtonUI();
     updateCloseButtonUI();
+    updateRemovalCountBubble();
     finishLoadingBar();
   });
 
@@ -2123,6 +2174,7 @@ function wireWebView(el) {
     updateNavButtons();
     updateRefreshButtonUI();
     updateCloseButtonUI();
+    updateRemovalCountBubble();
     finishLoadingBar();
     // Re-apply hover highlighter if selection mode is active and this view is visible
     try { if (elementSelectMode && el === getVisibleWebView()) { setWebViewHoverHighlighter(el, true); } } catch {}
@@ -2192,6 +2244,7 @@ function wireWebView(el) {
       updateRefreshButtonUI();
       finishLoadingBar();
     }
+    updateRemovalCountBubble();
     // Ensure domain removal rules run after full load as well
     (async () => {
       try {
@@ -2252,6 +2305,7 @@ function switchToWebView(el) {
   updateNavButtons();
   updateRefreshButtonUI();
   updateCloseButtonUI();
+  updateRemovalCountBubble();
   try {
     const url = el.getURL?.() || '';
     updateAddressBarWithURL(url);
