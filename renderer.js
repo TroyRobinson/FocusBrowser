@@ -4314,6 +4314,8 @@ let findOpen = false;
 let findQuery = '';
 let findMatches = 0;
 let findActive = 0;
+let findDebounceTimer = null;
+const FIND_DEBOUNCE_MS = 450;
 
 function updateFindUI() {
   try {
@@ -4387,15 +4389,37 @@ function doFind(opts = {}) {
 }
 
 // Wire find bar UI events
-try { findNextBtn?.addEventListener('click', () => { doFind({}); }); } catch {}
-try { findPrevBtn?.addEventListener('click', () => { doFind({ backward: true }); }); } catch {}
-try { findCloseBtn?.addEventListener('click', () => { closeFindBar(); }); } catch {}
-try { findInput?.addEventListener('input', () => { doFind({ initial: true }); }); } catch {}
+try { findNextBtn?.addEventListener('click', () => { if (findDebounceTimer) { clearTimeout(findDebounceTimer); findDebounceTimer = null; } doFind({}); }); } catch {}
+try { findPrevBtn?.addEventListener('click', () => { if (findDebounceTimer) { clearTimeout(findDebounceTimer); findDebounceTimer = null; } doFind({ backward: true }); }); } catch {}
+try { findCloseBtn?.addEventListener('click', () => { if (findDebounceTimer) { clearTimeout(findDebounceTimer); findDebounceTimer = null; } closeFindBar(); }); } catch {}
+try {
+  findInput?.addEventListener('input', () => {
+    try {
+      if (findDebounceTimer) { clearTimeout(findDebounceTimer); findDebounceTimer = null; }
+      const val = String(findInput?.value || '').trim();
+      if (!val) {
+        // If cleared, immediately clear highlights
+        doFind({ initial: true });
+        return;
+      }
+      findDebounceTimer = setTimeout(() => { try { doFind({ initial: true }); } catch {} }, FIND_DEBOUNCE_MS);
+    } catch {}
+  });
+} catch {}
 try {
   findInput?.addEventListener('keydown', (e) => {
     try {
-      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (e.shiftKey) doFind({ backward: true }); else doFind({}); }
-      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFindBar(); }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (findDebounceTimer) { clearTimeout(findDebounceTimer); findDebounceTimer = null; }
+        if (e.shiftKey) doFind({ backward: true }); else doFind({});
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (findDebounceTimer) { clearTimeout(findDebounceTimer); findDebounceTimer = null; }
+        closeFindBar();
+      }
     } catch {}
   }, true);
 } catch {}
