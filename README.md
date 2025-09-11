@@ -7,8 +7,9 @@ Commands
 
 - Install dependencies: HOME=$(pwd)/.home npm install
 - Start the app: npm start
-- Build macOS DMG (Apple Silicon): HOME=$(pwd)/.home ELECTRON_CACHE=$(pwd)/.cache/electron npm run make
+- Build macOS DMG (Apple Silicon): HOME=$(pwd)/.home ELECTRON_CACHE=$(pwd)/.cache/electron npm run make -- --arch=arm64
   - Output: out/make/Focus Browser-<version>-arm64.dmg
+  - Also produces ZIP: out/make/zip
   - First run: Control-click the app in Applications, choose Open (unsigned)
 
 Notes
@@ -24,3 +25,4 @@ Troubleshooting
   - **macOS**: `rm -rf ~/Library/Application\ Support/focus-browser`
   - **Windows**: `rmdir /s /q "%APPDATA%\focus-browser"`
   - **Linux**: `rm -rf ~/.config/focus-browser`
+ - **DMG build ABI error**: If you see a native module "NODE_MODULE_VERSION" mismatch (e.g., macos-alias), run `HOME=$(pwd)/.home npm rebuild` and retry the make command.
