@@ -2373,6 +2373,33 @@ function wireWebView(el) {
   applyWebViewFrameStyles(el);
   setLastAllowed(el, 'about:blank');
 
+  // Surface console logs from the webview into the host DevTools console
+  // This makes console.log/warn/error from pages (and their iframes) visible
+  try {
+    el.addEventListener('console-message', (e) => {
+      try {
+        const level = Number(e?.level);
+        const msg = String(e?.message ?? '');
+        const line = Number.isFinite(e?.line) ? e.line : null;
+        const source = e?.sourceId ? String(e.sourceId) : '';
+        const url = (() => {
+          try { return el.getURL?.() || ''; } catch { return ''; }
+        })();
+        let host = '';
+        try { if (url) host = new URL(url).hostname; } catch {}
+        const id = viewId(el);
+        const prefix = `[webview:${id}${host ? ` ${host}` : ''}]`;
+        const src = source || line ? `${source || ''}${line ? `:${line}` : ''}` : '';
+        const suffix = src ? ` (${src})` : '';
+        const method = (level === 2 || level === 3) ? 'error' : (level === 1 ? 'warn' : 'log');
+        // eslint-disable-next-line no-console
+        (console[method] || console.log)(`${prefix} ${msg}${suffix}`);
+      } catch (err) {
+        try { console.log('[webview console-message]', String(err && err.message || err)); } catch {}
+      }
+    });
+  } catch {}
+
   // Hide suggestions when interacting with this webview
   el.addEventListener('focus', () => { hideSuggestions(); });
   // pointerdown handler removed (handled globally)
@@ -2414,15 +2441,18 @@ function wireWebView(el) {
       const aid = findActiveIdByWebView(el);
       if (aid && activeLocations.has(aid)) {
         const rec = activeLocations.get(aid);
-        rec.url = e.url || rec.url;
-        try {
-          if (isAIChatURL(e.url || el.getURL?.() || '')) {
-            rec.title = getAIChatInitialQueryFromWebView(el) || rec.title || '';
-          } else {
-            rec.title = el.getTitle?.() || rec.title || '';
-          }
-        } catch {}
-        persistActiveSessions().catch(() => {});
+        const newUrl = e.url || el.getURL?.() || '';
+        if (newUrl && newUrl !== 'about:blank') {
+          rec.url = newUrl;
+          try {
+            if (isAIChatURL(newUrl)) {
+              rec.title = getAIChatInitialQueryFromWebView(el) || rec.title || '';
+            } else {
+              rec.title = el.getTitle?.() || rec.title || '';
+            }
+          } catch {}
+          persistActiveSessions().catch(() => {});
+        }
       }
     } catch {}
     updateNavButtons();
@@ -2463,15 +2493,18 @@ function wireWebView(el) {
       const aid = findActiveIdByWebView(el);
       if (aid && activeLocations.has(aid)) {
         const rec = activeLocations.get(aid);
-        rec.url = e.url || rec.url;
-        try {
-          if (isAIChatURL(e.url || el.getURL?.() || '')) {
-            rec.title = getAIChatInitialQueryFromWebView(el) || rec.title || '';
-          } else {
-            rec.title = el.getTitle?.() || rec.title || '';
-          }
-        } catch {}
-        persistActiveSessions().catch(() => {});
+        const newUrl = e.url || el.getURL?.() || '';
+        if (newUrl && newUrl !== 'about:blank') {
+          rec.url = newUrl;
+          try {
+            if (isAIChatURL(newUrl)) {
+              rec.title = getAIChatInitialQueryFromWebView(el) || rec.title || '';
+            } else {
+              rec.title = el.getTitle?.() || rec.title || '';
+            }
+          } catch {}
+          persistActiveSessions().catch(() => {});
+        }
       }
     } catch {}
     updateNavButtons();
@@ -2521,15 +2554,17 @@ function wireWebView(el) {
         const aid = findActiveIdByWebView(el);
         if (aid && activeLocations.has(aid)) {
           const rec = activeLocations.get(aid);
-          rec.url = current || rec.url;
-          try {
-            if (isAIChatURL(current || el.getURL?.() || '')) {
-              rec.title = getAIChatInitialQueryFromWebView(el) || rec.title || '';
-            } else {
-              rec.title = el.getTitle?.() || rec.title || '';
-            }
-          } catch {}
-          persistActiveSessions().catch(() => {});
+          if (current && current !== 'about:blank') {
+            rec.url = current;
+            try {
+              if (isAIChatURL(current)) {
+                rec.title = getAIChatInitialQueryFromWebView(el) || rec.title || '';
+              } else {
+                rec.title = el.getTitle?.() || rec.title || '';
+              }
+            } catch {}
+            persistActiveSessions().catch(() => {});
+          }
         }
       } catch {}
     } catch {}
