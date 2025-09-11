@@ -963,6 +963,35 @@ function renderWhitelist() {
         right.appendChild(cd);
       }
 
+      // Removal rules red badge (per domain)
+      const removalBadge = document.createElement('span');
+      removalBadge.className = 'removal-badge hidden';
+      removalBadge.textContent = '0';
+      removalBadge.title = 'Removed elements — click to restore';
+      removalBadge.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          const domain = getRegistrableDomain(item.domain) || item.domain;
+          await setDomainRemovalRules(domain, []);
+          // For each webview on this domain, disconnect and reload
+          for (const w of getAllWebViews()) {
+            try {
+              const u = w?.getURL?.() || '';
+              if (!u) continue;
+              const h = new URL(u).hostname.toLowerCase();
+              const d = getRegistrableDomain(h) || h;
+              if (d !== domain) continue;
+              await w.executeJavaScript(`(() => { try { const k='__FB_REMOVE_RULES__'; const s=window[k]; if (s && s.observer && s.observer.disconnect) s.observer.disconnect(); window[k]=null; } catch {} return true; })();`, true).catch(() => {});
+              w.reload?.();
+            } catch {}
+          }
+          showBanner(`Restored removed elements for ${domain}`, '', 2600);
+        } catch {}
+        try { updateRemovalCountBubble(); } catch {}
+        renderWhitelist();
+      });
+      right.appendChild(removalBadge);
+
       const btn = document.createElement('button');
       btn.className = 'remove';
       btn.textContent = 'Remove';
@@ -1011,6 +1040,22 @@ function renderWhitelist() {
       li.appendChild(left);
       li.appendChild(right);
       domainList.appendChild(li);
+
+      // Async update for removal badge count
+      (async () => {
+        try {
+          const domain = getRegistrableDomain(item.domain) || item.domain;
+          const rules = await getDomainRemovalRules(domain);
+          const c = Array.isArray(rules) ? rules.length : 0;
+          if (c > 0) {
+            removalBadge.textContent = String(c);
+            removalBadge.classList.remove('hidden');
+            removalBadge.title = `Removed elements on ${domain} — click to restore`;
+          } else {
+            removalBadge.classList.add('hidden');
+          }
+        } catch {}
+      })();
     });
   }
 
