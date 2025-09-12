@@ -855,10 +855,17 @@ async function checkBlacklistForWebView(el) {
     const js = `(() => {
       try {
         const TERMS = ${JSON.stringify(payload)};
-        const title = String(document.title || '').toLowerCase();
+        function normSpaces(s) { return String(s || '').replace(/[\s\u00A0]+/g, ' ').trim().toLowerCase(); }
+        function normAlnum(s) { return normSpaces(String(s||'').toLowerCase()).replace(/[^a-z0-9_]+/g, ' ').replace(/[ ]+/g, ' ').trim(); }
+        const titleRaw = String(document.title || '');
+        const title = normSpaces(titleRaw);
+        const titleNP = normAlnum(titleRaw);
         const body = document.body;
-        const txt = String(body ? (body.innerText || body.textContent || '') : (document.documentElement?.innerText || ''));
-        const hay = txt.toLowerCase();
+        const raw = String(body ? (body.innerText || body.textContent || '') : (document.documentElement?.innerText || ''));
+        const hay = normSpaces(raw);
+        const hayNP = normAlnum(raw);
+        const pTitleNP = ' ' + titleNP + ' ';
+        const pHayNP = ' ' + hayNP + ' ';
         function isWord(ch) { return /[A-Za-z0-9_]/.test(ch || ''); }
         function containsWhole(h, nd) {
           if (!nd) return false;
@@ -872,12 +879,20 @@ async function checkBlacklistForWebView(el) {
           return false;
         }
         for (const t of TERMS) {
-          const needle = String(t.term || '').toLowerCase();
-          if (!needle) continue;
+          const needle = String(t.term || '');
+          const nLower = needle.toLowerCase();
+          if (!nLower) continue;
           if (t.phrase) {
-            if (hay.includes(needle) || title.includes(needle)) return t.term;
+            const nNeedleNP = normAlnum(nLower);
+            if (!nNeedleNP) continue;
+            if (hayNP.includes(nNeedleNP) || titleNP.includes(nNeedleNP)) return t.term;
+            // Fallback simple space-only match
+            const nNeedle = normSpaces(nLower);
+            if (hay.includes(nNeedle) || title.includes(nNeedle)) return t.term;
           } else {
-            if (containsWhole(hay, needle) || containsWhole(title, needle)) return t.term;
+            const nWord = normAlnum(nLower);
+            if (nWord && (pHayNP.includes(' ' + nWord + ' ') || pTitleNP.includes(' ' + nWord + ' '))) return t.term;
+            if (containsWhole(hay, nLower) || containsWhole(title, nLower)) return t.term;
           }
         }
         return null;
@@ -896,7 +911,7 @@ async function checkBlacklistForWebView(el) {
 
 async function handleBlacklistHit(el, term) {
   try {
-    const msg = `${term} blacklist word/phrase was found in the page and thus closed`;
+    const msg = `"${term}" blacklist word/phrase was found in the page and thus closed`;
     // Close: if active view, remove it. If primary, navigate to about:blank.
     const isVisible = (el === getVisibleWebView());
     const aid = findActiveIdByWebView(el);
@@ -1199,10 +1214,11 @@ function parseBlacklistTerms(raw) {
   try {
     const s = String(raw || '');
     const out = [];
+    const norm = s.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
     // Match quoted phrases or bare tokens; supports "...", '...'
     const re = /"([^"]+)"|'([^']+)'|([^\s,\n]+)/g;
     let m;
-    while ((m = re.exec(s)) !== null) {
+    while ((m = re.exec(norm)) !== null) {
       const term = (m[1] || m[2] || m[3] || '').trim();
       if (term) out.push(term);
     }
