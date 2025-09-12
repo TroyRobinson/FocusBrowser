@@ -8,6 +8,34 @@ try {
   fetch = require('cross-fetch');
 } catch {}
 
+// Unify userData path across dev (npm start) and packaged builds
+// Use productName so both point to the same directory, e.g.,
+// macOS: ~/Library/Application Support/Focus Browser
+// Windows: %APPDATA%/Focus Browser
+// Linux: ~/.config/Focus Browser
+try {
+  const pkg = require('./package.json');
+  const appDataRoot = app.getPath('appData');
+  const productName = String(pkg.productName || pkg.name || app.getName());
+  const unifiedUserData = path.join(appDataRoot, productName);
+
+  // One-time migration: if legacy dev path exists (based on package name) and target does not, copy focus-data.json
+  const legacyName = String(pkg.name || '').trim();
+  if (legacyName && legacyName !== productName) {
+    const legacyUserData = path.join(appDataRoot, legacyName);
+    const legacyFile = path.join(legacyUserData, 'focus-data.json');
+    const targetFile = path.join(unifiedUserData, 'focus-data.json');
+    try {
+      if (fs.existsSync(legacyFile) && !fs.existsSync(targetFile)) {
+        fs.mkdirSync(unifiedUserData, { recursive: true });
+        fs.copyFileSync(legacyFile, targetFile);
+      }
+    } catch {}
+  }
+
+  app.setPath('userData', unifiedUserData);
+} catch {}
+
 let mainWindow = null;
 let blocker = null;
 let adblockEnabled = true;

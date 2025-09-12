@@ -100,11 +100,24 @@ body {
   text-align: center;
   cursor: pointer;
   z-index: 1;
-  transition: background-color 0.2s ease;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  box-sizing: border-box;
+}
+
+/* Outline variant when current location is not active/persisted */
+.active-count-bubble.outline {
+  background: transparent;
+  color: var(--accent);
+  border: 2px solid var(--accent);
 }
 
 .active-count-bubble:hover {
   background: #3d5fcc;
+}
+
+/* Keep hover subtle for outline mode */
+.active-count-bubble.outline:hover {
+  background: rgba(79, 124, 255, 0.08);
 }
 
 /* Red removal rules bubble sits just to the left of the active count */
@@ -328,10 +341,6 @@ textarea.address-input {
   display: block;
 }
 
-/* Close button state-specific color: default inherits .icon-button (fg); X state uses accent */
-#close-active-button[aria-label="Close active session"] {
-  color: var(--accent);
-}
 
 .extensions-item {
   display: flex;

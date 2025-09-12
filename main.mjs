@@ -4,6 +4,12 @@ import { fileURLToPath } from 'node:url';
 
 const { app, BrowserWindow, Menu } = electron;
 
+// Unify userData path here as well so this entrypoint shares the same data dir
+try {
+  const unifiedUserData = path.join(app.getPath('appData'), 'Focus Browser');
+  app.setPath('userData', unifiedUserData);
+} catch {}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 

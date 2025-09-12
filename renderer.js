@@ -27,8 +27,17 @@ function isAIQuery(input) {
   return false;
 }
 
+function stripNewTabSuffix(str) {
+  try {
+    const s = String(str || '');
+    return s.replace(/ \+ open in a new (persistent )?tab$/i, '');
+  } catch {
+    return String(str || '');
+  }
+}
+
 function normalizeToURL(input) {
-  const trimmed = (input || '').trim();
+  const trimmed = stripNewTabSuffix(input || '').trim();
   if (!trimmed) return null;
   
   // Check if it's an AI query first
@@ -84,9 +93,9 @@ const backBtn = document.getElementById('back-button');
 const navBackBtn = document.getElementById('nav-back-button');
 const navForwardBtn = document.getElementById('nav-forward-button');
 const navRefreshBtn = document.getElementById('nav-refresh-button');
+const newActiveBtn = document.getElementById('new-active-button');
 const loadingBar = document.getElementById('loading-bar');
 const suggestionsEl = document.getElementById('address-suggestions');
-const closeActiveBtn = document.getElementById('close-active-button');
 const activeCountBubble = document.getElementById('active-count-bubble');
 const removalCountBubble = document.getElementById('removal-count-bubble');
 // Find-on-page UI
@@ -400,6 +409,22 @@ async function safeRemoveItem(key) {
     return false;
   }
 }
+
+// Bootstrap storage sync: ensure critical keys from focusStorage are mirrored into localStorage
+// This makes legacy localStorage readers (e.g., whitelist/delay loaders) see unified data
+(async function bootstrapStorageSync() {
+  try {
+    const keys = [WL_KEY, DELAY_KEY, DELAY_PENDING_MIN_KEY, DELAY_PENDING_AT_KEY, ADBLOCK_OFF_DOMAINS_KEY];
+    for (const k of keys) {
+      try {
+        const v = await safeGetItem(k);
+        if (v != null && localStorage.getItem(k) !== v) {
+          localStorage.setItem(k, v);
+        }
+      } catch {}
+    }
+  } catch {}
+})();
 
 // LLM Settings functions
 async function loadLLMSettings() {
@@ -2315,7 +2340,7 @@ async function persistActiveSessions() {
     for (const [id, rec] of activeLocations) {
       const url = (rec?.webview?.getURL?.() || rec?.url || '').trim();
       const title = String(rec?.title || '');
-      if (!url) continue;
+      if (!url || url === 'about:blank') continue; // do not persist blank placeholders
       arr.push({ id: String(id), url, title });
     }
     await safeSetItem(ACTIVE_SESSIONS_KEY, JSON.stringify(arr));
@@ -2526,8 +2551,7 @@ function wireWebView(el) {
     } catch {}
     updateNavButtons();
     updateRefreshButtonUI();
-    updateCloseButtonUI();
-    updateRemovalCountBubble();
+        updateRemovalCountBubble();
     finishLoadingBar();
   });
   el.addEventListener('did-navigate-in-page', (e) => {
@@ -2578,8 +2602,7 @@ function wireWebView(el) {
     } catch {}
     updateNavButtons();
     updateRefreshButtonUI();
-    updateCloseButtonUI();
-    updateRemovalCountBubble();
+        updateRemovalCountBubble();
     finishLoadingBar();
   });
 
@@ -2639,8 +2662,7 @@ function wireWebView(el) {
     } catch {}
     updateNavButtons();
     updateRefreshButtonUI();
-    updateCloseButtonUI();
-    updateRemovalCountBubble();
+        updateRemovalCountBubble();
     finishLoadingBar();
     // Apply dark mode if enabled
     try { debugLog('dark-mode dom-ready', { id: viewId(el), enabled: !!darkModeEnabled }); } catch {}
@@ -2816,6 +2838,25 @@ async function ensureAdblockStateForURL(url) {
 function switchToWebView(el) {
   if (!el) return;
   debugLog('switchToWebView', { from: viewId(currentVisibleView), to: viewId(el), fromURL: viewURL(currentVisibleView), toURL: viewURL(el) });
+
+  // If leaving an active location that never navigated (about:blank), remove it to avoid persisting blanks
+  try {
+    const cur = currentVisibleView;
+    const curAid = findActiveIdByWebView(cur);
+    if (curAid) {
+      const curUrl = (cur?.getURL?.() || '').trim();
+      if (!curUrl || curUrl === 'about:blank') {
+        debugLog('auto-remove blank active on switch', { id: curAid, viewId: viewId(cur) });
+        activeLocations.delete(String(curAid));
+        activeMru = activeMru.filter((x) => x !== String(curAid) && activeLocations.has(x));
+        try { cur.remove(); } catch {}
+        if (cur === primaryWebView) { primaryWebView = null; }
+        updateActiveCountBubble();
+        persistActiveSessions().catch(() => {});
+      }
+    }
+  } catch {}
+
   // Hide current
   if (currentVisibleView) currentVisibleView.classList.add('hidden');
   // Show target
@@ -2830,8 +2871,8 @@ function switchToWebView(el) {
   } catch {}
   updateNavButtons();
   updateRefreshButtonUI();
-  updateCloseButtonUI();
-  updateRemovalCountBubble();
+    updateRemovalCountBubble();
+  updateActiveCountBubble();
   try {
     const url = el.getURL?.() || '';
     updateAddressBarWithURL(url);
@@ -2885,17 +2926,8 @@ function parkCurrentAsActive(flashUI = false) {
   activeLocations.set(id, { id, title: seedTitle, url: currentURL, webview: el });
   debugLog('parkCurrentAsActive: created', { id, viewId: viewId(el), url: currentURL, title: seedTitle });
   
-  // Update bubble count and close button UI
+  // Update bubble count
   updateActiveCountBubble(flashUI);
-  updateCloseButtonUI();
-  
-  // Flash the close button to indicate the change (when triggered by Shift+Enter)
-  if (flashUI && closeActiveBtn) {
-    closeActiveBtn.style.backgroundColor = '#2563eb';
-    setTimeout(() => {
-      closeActiveBtn.style.backgroundColor = '';
-    }, 300);
-  }
   // Try to update title asynchronously
   setTimeout(() => {
     try {
@@ -2924,6 +2956,69 @@ function switchToActive(id) {
   if (!rec) { debugLog('switchToActive: not found', { id }); return; }
   debugLog('switchToActive', { id, viewId: viewId(rec.webview), url: viewURL(rec.webview) });
   switchToWebView(rec.webview);
+}
+
+// Create a new about:blank view and switch to it.
+// When makeActive is true, create a persistent active webview; else use ephemeral primary.
+function createNewActiveBlankAndSwitch(makeActive = false) {
+  try {
+    if (makeActive) {
+      const id = String(activeSeq++);
+      const el = document.createElement('webview');
+      el.id = `webview-active-${id}`;
+      el.setAttribute('disableblinkfeatures', 'AutomationControlled');
+      el.setAttribute('allowpopups', '');
+      applyWebViewFrameStyles(el);
+      const container = getContentContainer();
+      container?.appendChild(el);
+      wireWebView(el);
+      setLastAllowed(el, 'about:blank');
+      try { el.setAttribute('src', 'about:blank'); } catch { el.src = 'about:blank'; }
+      activeLocations.set(id, { id, title: '', url: 'about:blank', webview: el });
+      updateActiveCountBubble();
+      persistActiveSessions().catch(() => {});
+      switchToWebView(el);
+      leaveSettingsIfOpen();
+      try { if (input) { input.value = ''; input.focus(); input.select?.(); } } catch {}
+      return id;
+    }
+    // Ephemeral (non-persistent)
+    const primary = ensurePrimaryWebView();
+    setLastAllowed(primary, 'about:blank');
+    try { primary.setAttribute('src', 'about:blank'); } catch { primary.src = 'about:blank'; }
+    switchToWebView(primary);
+    leaveSettingsIfOpen();
+    try { if (input) { input.value = ''; input.focus(); input.select?.(); } } catch {}
+    return 'primary';
+  } catch (err) {
+    debugLog('createNewActiveBlankAndSwitch: error', String(err && err.message || err));
+    return null;
+  }
+}
+
+function createActiveViewWithURL(url) {
+  try {
+    const id = String(activeSeq++);
+    const el = document.createElement('webview');
+    el.id = `webview-active-${id}`;
+    el.setAttribute('disableblinkfeatures', 'AutomationControlled');
+    el.setAttribute('allowpopups', '');
+    applyWebViewFrameStyles(el);
+    const container = getContentContainer();
+    container?.appendChild(el);
+    wireWebView(el);
+    setLastAllowed(el, url);
+    try { el.setAttribute('src', url); } catch { el.src = url; }
+    activeLocations.set(id, { id, title: '', url, webview: el });
+    updateActiveCountBubble();
+    persistActiveSessions().catch(() => {});
+    switchToWebView(el);
+    leaveSettingsIfOpen();
+    return id;
+  } catch (err) {
+    debugLog('createActiveViewWithURL: error', String(err && err.message || err));
+    return null;
+  }
 }
 
 function closeActiveById(id) {
@@ -2963,8 +3058,7 @@ function closeActiveById(id) {
           switchToWebView(primary);
         }
       }
-      updateCloseButtonUI();
-    }
+          }
   } catch (err) {
     debugLog('closeActiveById: error', String(err && err.message || err));
   }
@@ -3399,8 +3493,11 @@ async function handleAIChat(query, opts = {}) {
 
 function navigate(opts = {}) {
   clearBannerAction(); // Clear banner action when navigating
-  const target = normalizeToURL(input.value);
-  debugLog('navigate()', { targetRaw: input.value, target, shift: !!opts.shiftKey });
+  const raw = input.value;
+  const target = normalizeToURL(raw);
+  const openInNew = !!opts.openInNew;
+  const newIsActive = !!opts.newIsActive;
+  debugLog('navigate()', { targetRaw: raw, target, openInNew, newIsActive });
   if (!target) { debugLog('navigate: invalid target'); return; }
   
   // Handle AI Chat URLs BEFORE whitelist check
@@ -3415,77 +3512,38 @@ function navigate(opts = {}) {
     showBlockedWithAdd(target);
     return;
   }
-  const shiftKey = !!opts.shiftKey;
   const current = getVisibleWebView();
-  debugLog('navigate: branch', { shiftKey, currentId: viewId(current), currentURL: viewURL(current) });
-  if (shiftKey) {
-    // Park current (if not already active) and navigate in a primary ephemeral view
-    parkCurrentAsActive();
+  debugLog('navigate: branch', { openInNew, newIsActive, currentId: viewId(current), currentURL: viewURL(current) });
+  if (openInNew && newIsActive) {
+    // Create a brand new active webview and navigate there
+    const id = createActiveViewWithURL(target);
+    debugLog('navigate new active', { id });
+    return;
+  }
+  if (openInNew && !newIsActive) {
+    // Open in ephemeral primary and switch
     const primary = ensurePrimaryWebView();
-    // Set destination first, then switch to avoid lingering on about:blank
-    // Prime fallback so a blocked redirect won’t revert to about:blank
     setLastAllowed(primary, target);
-    debugLog('set src (shift)', { id: viewId(primary), target });
+    debugLog('set src (new-ephemeral)', { id: viewId(primary), target });
     try { primary.setAttribute('src', target); } catch { primary.src = target; }
-    // Defer closing settings until load completes
     closeSettingsOnLoad(primary);
-    // Watchdog: check after 1200ms (debug only)
     if (DEBUG) {
-      setTimeout(() => {
-        debugLog('watchdog (shift): after set src', { id: viewId(primary), url: viewURL(primary), isLoading: !!primary?.isLoading?.() });
-      }, 1200);
+      setTimeout(() => { debugLog('watchdog (new-ephemeral): after set src', { id: viewId(primary), url: viewURL(primary), isLoading: !!primary?.isLoading?.() }); }, 1200);
     }
     switchToWebView(primary);
-  } else {
-    // If currently viewing an active location, navigate away in primary view; else reuse current
-    let dest = current;
-    let mustSwitch = false;
-    for (const [, rec] of activeLocations) {
-      if (rec.webview === current) { mustSwitch = true; break; }
-    }
-    if (mustSwitch) {
-      dest = ensurePrimaryWebView();
-      // Set destination first, keep current view visible until load completes
-      setLastAllowed(dest, target);
-      debugLog('set src (leave-active, preloading)', { id: viewId(dest), target });
-      try { dest.setAttribute('src', target); } catch { dest.src = target; }
-      // Start top loading bar while staying on current active view
-      try { isLoading = true; updateRefreshButtonUI(); startLoadingBar(); } catch {}
-      // Only reveal the new webview when it finishes loading
-      const onDone = () => {
-        try {
-          debugLog('preload complete, switching', { id: viewId(dest), url: viewURL(dest) });
-          switchToWebView(dest);
-          // Now that the destination is ready, close settings (if open)
-          leaveSettingsIfOpen();
-        } finally {
-          isLoading = false; updateRefreshButtonUI(); finishLoadingBar();
-        }
-      };
-      const onFail = (e) => {
-        try {
-          debugLog('preload failed; staying on current', { id: viewId(dest), code: e?.errorCode, url: e?.validatedURL });
-          // Keep current view; show banner if needed
-          // Loading completed (failed); close settings if they were open
-          leaveSettingsIfOpen();
-        } finally {
-          isLoading = false; updateRefreshButtonUI(); finishLoadingBar();
-        }
-      };
-      dest.addEventListener('did-stop-loading', onDone, { once: true });
-      dest.addEventListener('did-fail-load', onFail, { once: true });
-    } else {
-      setLastAllowed(dest, target);
-      debugLog('set src (reuse)', { id: viewId(dest), target });
-      try { dest.setAttribute('src', target); } catch { dest.src = target; }
-      // Defer closing settings until load completes
-      closeSettingsOnLoad(dest);
-      if (DEBUG) {
-        setTimeout(() => {
-          debugLog('watchdog (reuse): after set src', { id: viewId(dest), url: viewURL(dest), isLoading: !!dest?.isLoading?.() });
-        }, 1200);
-      }
-    }
+    return;
+  }
+  // Default: reuse current webview (in-place)
+  const dest = current;
+  setLastAllowed(dest, target);
+  debugLog('set src (in-place)', { id: viewId(dest), target });
+  try { dest.setAttribute('src', target); } catch { dest.src = target; }
+  // Defer closing settings until load completes
+  closeSettingsOnLoad(dest);
+  if (DEBUG) {
+    setTimeout(() => {
+      debugLog('watchdog (in-place): after set src', { id: viewId(dest), url: viewURL(dest), isLoading: !!dest?.isLoading?.() });
+    }, 1200);
   }
 }
 
@@ -3522,6 +3580,7 @@ function updateSuggestionSelection() {
     else el.classList.remove('selected');
     el.setAttribute('aria-selected', i === suggSelected ? 'true' : 'false');
   });
+  try { updateSuggestionOpenSuffix(); } catch {}
 }
 
 function renderHighlightedText(text, indices) {
@@ -3590,22 +3649,24 @@ function acceptSuggestion(idx, opts = {}) {
   clearBannerAction(); // Clear banner action when accepting suggestion
   if (!suggItems[idx]) return;
   const it = suggItems[idx];
+  const openInNew = !!opts.openInNew;
+  const newIsActive = !!opts.newIsActive;
   if (it.kind === 'active') {
-    debugLog('acceptSuggestion -> active', { id: it.id, shift: !!opts.shiftKey });
+    debugLog('acceptSuggestion -> active', { id: it.id, openInNew, newIsActive });
     hideSuggestions();
     // Ensure settings are closed so the selected webview is shown
     leaveSettingsIfOpen();
-    // If Shift is held, park the current view before switching to an existing active one
-    if (opts && opts.shiftKey) {
+    // If opening in new, keep current parked before switching
+    if (openInNew) {
       try { parkCurrentAsActive(); } catch {}
     }
     switchToActive(it.id);
     return;
   }
-  debugLog('acceptSuggestion -> nav', { value: it.value, shift: !!opts.shiftKey });
+  debugLog('acceptSuggestion -> nav', { value: it.value, openInNew, newIsActive });
   input.value = it.value;
   hideSuggestions();
-  navigate({ shiftKey: !!opts.shiftKey });
+  navigate({ openInNew, newIsActive });
 }
 
 function renderSuggestions(forceShowActive = false) {
@@ -3686,6 +3747,9 @@ function renderSuggestions(forceShowActive = false) {
       const hint = document.createElement('span');
       hint.className = 'hint';
       hint.textContent = `  — Active  ${it.detail ? `(${it.detail})` : ''}`;
+      const suffix = document.createElement('span');
+      suffix.className = 'hint open-suffix';
+      // placeholder, updated by updateSuggestionOpenSuffix
       const closeBtn = document.createElement('button');
       closeBtn.type = 'button';
       closeBtn.className = 'mini-close';
@@ -3697,26 +3761,34 @@ function renderSuggestions(forceShowActive = false) {
       });
       left.appendChild(strongFrag);
       left.appendChild(hint);
+      left.appendChild(suffix);
       li.appendChild(left);
       li.appendChild(closeBtn);
     } else if (it.typed) {
       const left = document.createElement('div');
       left.className = 'line-left';
       left.textContent = it.label;
+      const suffix = document.createElement('span');
+      suffix.className = 'hint open-suffix';
+      left.appendChild(suffix);
       li.appendChild(left);
     } else {
       const left = document.createElement('div');
       left.className = 'line-left';
       left.appendChild(renderHighlightedText(String(it.label), it.matches));
+      const suffix = document.createElement('span');
+      suffix.className = 'hint open-suffix';
+      left.appendChild(suffix);
       li.appendChild(left);
     }
     li.addEventListener('mouseenter', () => { suggSelected = idx; updateSuggestionSelection(); });
-    li.addEventListener('mousedown', (e) => { e.preventDefault(); acceptSuggestion(idx, { shiftKey: e.shiftKey }); });
+    li.addEventListener('mousedown', (e) => { e.preventDefault(); acceptSuggestion(idx, { openInNew: !!e.shiftKey, newIsActive: !!(e.shiftKey && (e.metaKey || e.ctrlKey)) }); });
     suggestionsEl.appendChild(li);
   });
   if (items.length === 0) { hideSuggestions(); return; }
   updateSuggestionsPosition();
   suggestionsEl.classList.remove('hidden');
+  try { updateSuggestionOpenSuffix(); } catch {}
 }
 
 function startLoadingBar() {
@@ -3775,8 +3847,7 @@ function updateNavButtons() {
       if (navBackBtn) navBackBtn.disabled = true;
       if (navForwardBtn) navForwardBtn.disabled = true;
       if (navRefreshBtn) navRefreshBtn.disabled = true;
-      if (closeActiveBtn) closeActiveBtn.disabled = true;
-      if (extensionsBtn) extensionsBtn.disabled = true;
+            if (extensionsBtn) extensionsBtn.disabled = true;
       return;
     }
     const view = getVisibleWebView();
@@ -3785,8 +3856,7 @@ function updateNavButtons() {
     if (navBackBtn) navBackBtn.disabled = !canBack;
     if (navForwardBtn) navForwardBtn.disabled = !canFwd;
     if (navRefreshBtn) navRefreshBtn.disabled = false;
-    if (closeActiveBtn) closeActiveBtn.disabled = false;
-    if (extensionsBtn) extensionsBtn.disabled = false;
+        if (extensionsBtn) extensionsBtn.disabled = false;
   } catch {
     if (navBackBtn) navBackBtn.disabled = true;
     if (navForwardBtn) navForwardBtn.disabled = true;
@@ -3820,6 +3890,17 @@ function updateActiveCountBubble(flash = false) {
     // While settings are visible, hide bubble entirely
     if (settingsView && !settingsView.classList.contains('hidden')) { activeCountBubble.classList.add('hidden'); return; }
     const count = activeLocations.size;
+
+    // Style: outline when current location is not an active/persisted session
+    try {
+      const current = getVisibleWebView();
+      const isCurrentActive = !!findActiveIdByWebView(current);
+      if (isCurrentActive) {
+        activeCountBubble.classList.remove('outline');
+      } else {
+        activeCountBubble.classList.add('outline');
+      }
+    } catch {}
     
     if (count > 0) {
       activeCountBubble.textContent = String(count);
@@ -3838,34 +3919,6 @@ function updateActiveCountBubble(flash = false) {
   } catch {}
 }
 
-function updateCloseButtonUI() {
-  try {
-    const view = getVisibleWebView();
-    const aid = findActiveIdByWebView(view);
-    const currentURL = view?.getURL?.() || '';
-    const isBlankPage = currentURL === 'about:blank' || currentURL === '';
-    
-    if (closeActiveBtn) {
-      // Always show; toggle label and a11y based on active state
-      closeActiveBtn.classList.remove('hidden');
-      if (aid) {
-        closeActiveBtn.textContent = '✕';
-        closeActiveBtn.classList.remove('danger');
-        closeActiveBtn.setAttribute('aria-label', 'Close active session');
-        closeActiveBtn.setAttribute('title', 'Close active session');
-        closeActiveBtn.disabled = false;
-      } else {
-        closeActiveBtn.textContent = '+';
-        closeActiveBtn.classList.remove('danger');
-        closeActiveBtn.setAttribute('aria-label', 'Add as active session');
-        closeActiveBtn.setAttribute('title', 'Add as active session');
-        closeActiveBtn.disabled = isBlankPage;
-      }
-    }
-    
-    updateActiveCountBubble();
-  } catch {}
-}
 
 // --- Events wiring ---
 wireWebView(primaryWebView);
@@ -3893,23 +3946,40 @@ navRefreshBtn?.addEventListener('click', (e) => {
   refreshOrNewThread({ shiftKey: !!e.shiftKey });
 });
 
-closeActiveBtn?.addEventListener('click', (e) => {
+newActiveBtn?.addEventListener('click', (e) => {
   e.preventDefault();
-  try {
-    const v = getVisibleWebView();
-    const aid = findActiveIdByWebView(v);
-    debugLog('closeActiveBtn click', { id: viewId(v), url: viewURL(v), aid });
-    if (aid) {
-      closeCurrentActive();
-    } else {
-      const parked = parkCurrentAsActive();
-      debugLog('park via plus button', { parked });
-      updateCloseButtonUI();
-    }
-  } catch {}
+  try { clearBannerAction(); } catch {}
+  try { hideExtensionsPopover(); } catch {}
+  try { hideSuggestions(); } catch {}
+  createNewActiveBlankAndSwitch(!!e.shiftKey);
 });
 
+
 // Input interactions
+let __heldShift = false;
+let __heldMetaCtrl = false;
+
+function openSuffixText() {
+  if (!__heldShift) return '';
+  return __heldMetaCtrl ? ' + open in a new persistent tab' : ' + open in a new tab';
+}
+
+function updateSuggestionOpenSuffix() {
+  try {
+    if (!suggestionsEl) return;
+    const children = Array.from(suggestionsEl.children);
+    const text = openSuffixText();
+    children.forEach((li, idx) => {
+      const spans = li.querySelectorAll('.open-suffix');
+      spans.forEach((s) => { s.textContent = ''; });
+      if (idx === suggSelected && text) {
+        const s = li.querySelector('.open-suffix');
+        if (s) s.textContent = ` ${text}`;
+      }
+    });
+  } catch {}
+}
+
 input.addEventListener('input', () => { 
   clearBannerAction(); // Clear banner action when user types
   renderSuggestions(); 
@@ -3953,6 +4023,13 @@ activeCountBubble?.addEventListener('click', (e) => {
 });
 
 input.addEventListener('keydown', (e) => {
+  try {
+    if (document.activeElement === input) {
+      if (e.key === 'Shift') { __heldShift = true; }
+      if (e.key === 'Meta' || e.key === 'Control') { __heldMetaCtrl = true; }
+      updateSuggestionOpenSuffix();
+    }
+  } catch {}
   if (e.key === 'Enter') {
     // Cmd+Enter: while on an AI chat thread with "Continue the conversation...", start a fresh chat with the typed message
     try {
@@ -3962,18 +4039,20 @@ input.addEventListener('keydown', (e) => {
       const isContinueMode = !!(input && typeof input.placeholder === 'string' && input.placeholder.startsWith('Continue the conversation'));
       if ((e.metaKey || e.ctrlKey) && onAIChat && isContinueMode) {
         e.preventDefault();
-        const q = String(input?.value || '').trim();
+        const q = String(stripNewTabSuffix(input?.value) || '').trim();
         if (q) {
           // Drop existing conversation mapping so this becomes a brand-new thread
           try { if (v) conversationByView.delete(v); } catch {}
           currentConversation = null;
-          handleAIChat(q, { shiftKey: false });
+          handleAIChat(q, { openInNew: false });
         }
         return;
       }
     } catch {}
 
-    debugLog('keydown Enter', { shift: !!e.shiftKey, suggSelected });
+    const openInNew = !!e.shiftKey;
+    const newIsActive = !!(e.shiftKey && (e.metaKey || e.ctrlKey));
+    debugLog('keydown Enter', { openInNew, newIsActive, suggSelected });
     e.preventDefault();
     
     // Check if there's a banner action available for confirmation
@@ -3982,17 +4061,10 @@ input.addEventListener('keydown', (e) => {
       return;
     }
     
-    // If Shift is held, park the current view (visual cue), then continue to navigate
-    if (e.shiftKey) {
-      try { 
-        parkCurrentAsActive(true); // Flash the UI when triggered by Shift+Enter
-      } catch {}
-    }
-    
     if (suggSelected >= 0) {
-      acceptSuggestion(suggSelected, { shiftKey: e.shiftKey });
+      acceptSuggestion(suggSelected, { openInNew, newIsActive });
     } else {
-      navigate({ shiftKey: e.shiftKey });
+      navigate({ openInNew, newIsActive });
     }
     return;
   }
@@ -4029,6 +4101,17 @@ input.addEventListener('keydown', (e) => {
     hideSuggestions();
   }
 });
+
+// Modifier tracking cleanup on keyup/blur
+try {
+  input.addEventListener('keyup', (e) => {
+    try {
+      if (e.key === 'Shift') { __heldShift = false; updateSuggestionOpenSuffix(); }
+      if (e.key === 'Meta' || e.key === 'Control') { __heldMetaCtrl = false; updateSuggestionOpenSuffix(); }
+    } catch {}
+  });
+  input.addEventListener('blur', () => { try { __heldShift = false; __heldMetaCtrl = false; updateSuggestionOpenSuffix(); } catch {} });
+} catch {}
 
 window.addEventListener('resize', () => {
   if (suggestionsEl && !suggestionsEl.classList.contains('hidden')) {
@@ -4221,7 +4304,6 @@ refreshUboToggle();
 (async () => { try { await refreshDarkToggle(); if (darkModeEnabled) await applyDarkModeToAllWebViews(true); } catch {} })();
 updateNavButtons();
 updateRefreshButtonUI();
-updateCloseButtonUI();
 updateActiveCountBubble();
 
 // Focus on address bar when browser opens
