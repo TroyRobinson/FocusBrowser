@@ -3505,11 +3505,25 @@ function getActiveSuggestions(q) {
   const items = [];
   const query = String(q || '').trim();
   const currentActiveId = findActiveIdByWebView(currentVisibleView);
-  
-  for (const [, rec] of activeLocations) {
-    // Skip the currently active/visible location
-    if (rec.id === currentActiveId) continue;
-    
+
+  // Build MRU-ordered list of active IDs (most recent first), excluding current visible
+  const orderedIds = [];
+  try {
+    for (const id of activeMru) {
+      if (id === currentActiveId) continue;
+      if (activeLocations.has(id)) orderedIds.push(id);
+    }
+    // Include any remaining active ids not present in MRU (e.g., restored sessions)
+    for (const [id] of activeLocations) {
+      if (id === currentActiveId) continue;
+      if (!orderedIds.includes(id)) orderedIds.push(id);
+    }
+  } catch {}
+
+  for (const id of orderedIds) {
+    const rec = activeLocations.get(id);
+    if (!rec) continue;
+
     const currentURL = rec.webview?.getURL?.() || rec.url || '';
     const ai = isAIChatURL(currentURL);
     let title = '';
@@ -3529,9 +3543,9 @@ function getActiveSuggestions(q) {
     const matchBase = ai ? (title || '') : `${label} ${detail}`.trim();
     const m = fuzzyMatch(query, matchBase);
     if (query && m.score < 0) continue;
-    items.push({ kind: 'active', id: rec.id, label, detail, score: query ? m.score : 9999, matches: m.indices });
+    items.push({ kind: 'active', id: rec.id, label, detail, matches: m.indices });
   }
-  items.sort((a, b) => b.score - a.score);
+  // Already MRU-ordered
   return items;
 }
 
@@ -4005,6 +4019,25 @@ function updateSuggestionSelection() {
     else el.classList.remove('selected');
     el.setAttribute('aria-selected', i === suggSelected ? 'true' : 'false');
   });
+  // Ensure the selected item is visible within the scrollable dropdown
+  try {
+    if (suggSelected >= 0 && suggSelected < children.length) {
+      const el = children[suggSelected];
+      // Prefer native scrollIntoView with nearest block to avoid jumping
+      if (typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ block: 'nearest' });
+      } else {
+        // Fallback: manual scroll math
+        const parent = suggestionsEl;
+        const top = el.offsetTop;
+        const bottom = top + el.offsetHeight;
+        const viewTop = parent.scrollTop;
+        const viewBottom = viewTop + parent.clientHeight;
+        if (top < viewTop) parent.scrollTop = top;
+        else if (bottom > viewBottom) parent.scrollTop = bottom - parent.clientHeight;
+      }
+    }
+  } catch {}
   try { updateSuggestionOpenSuffix(); } catch {}
 }
 
@@ -4447,10 +4480,18 @@ input.addEventListener('input', () => {
 });
 // When the address bar gains focus (via click or keyboard),
 // surface active locations if empty; otherwise show typing-based suggestions.
+// If focus was triggered via Cmd/Ctrl+L, always show active locations once.
 input.addEventListener('focus', () => {
   // If focus was caused by a mouse interaction, skip here; the click handler will render once to avoid flicker
   if (typeof __fbFocusByMouseDown !== 'undefined' && __fbFocusByMouseDown) { __fbFocusByMouseDown = false; return; }
-  try { forceActiveSuggestionsOnNextFocus = false; } catch {}
+
+  // If the next-focus is flagged (e.g., from Cmd/Ctrl+L), force-show active locations regardless of input value
+  if (forceActiveSuggestionsOnNextFocus) {
+    try { renderSuggestions(true); } catch {}
+    try { forceActiveSuggestionsOnNextFocus = false; } catch {}
+    return;
+  }
+
   const hasQuery = !!String(input?.value || '').trim();
   if (hasQuery) {
     renderSuggestions();
