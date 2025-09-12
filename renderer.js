@@ -178,6 +178,14 @@ function decodeHTMLEntities(str) {
   } catch { return String(str || ''); }
 }
 
+function escapeRegex(str) {
+  try {
+    return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  } catch {
+    return String(str || '');
+  }
+}
+
 function applyWebViewFrameStyles(el) {
   try {
     el.style.position = 'absolute';
@@ -210,6 +218,7 @@ setLastAllowed(primaryWebView, 'about:blank');
 
 // Storage keys
 const WL_KEY = 'whitelist';
+const BL_KEY = 'blacklist_v1';
 const DELAY_KEY = 'whitelist_delay_minutes';
 const DELAY_PENDING_MIN_KEY = 'whitelist_delay_pending_minutes';
 const DELAY_PENDING_AT_KEY = 'whitelist_delay_pending_activate_at';
@@ -414,7 +423,7 @@ async function safeRemoveItem(key) {
 // This makes legacy localStorage readers (e.g., whitelist/delay loaders) see unified data
 (async function bootstrapStorageSync() {
   try {
-    const keys = [WL_KEY, DELAY_KEY, DELAY_PENDING_MIN_KEY, DELAY_PENDING_AT_KEY, ADBLOCK_OFF_DOMAINS_KEY];
+    const keys = [WL_KEY, BL_KEY, DELAY_KEY, DELAY_PENDING_MIN_KEY, DELAY_PENDING_AT_KEY, ADBLOCK_OFF_DOMAINS_KEY];
     for (const k of keys) {
       try {
         const v = await safeGetItem(k);
@@ -494,6 +503,55 @@ async function saveWhitelist(list) {
   }
   const data = JSON.stringify(Array.from(map.values()));
   await safeSetItem(WL_KEY, data);
+}
+
+// --- Blacklist: terms/phrases that trigger auto-close ---
+function loadBlacklist() {
+  try {
+    const raw = localStorage.getItem(BL_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const items = parsed
+      .map((v) => {
+        if (typeof v === 'string') return { term: v.trim(), activateAt: 0 };
+        if (v && typeof v === 'object' && typeof v.term === 'string') {
+          const term = v.term.trim();
+          const at = Number(v.activateAt || 0);
+          return term ? { term, activateAt: Number.isFinite(at) ? at : 0 } : null;
+        }
+        return null;
+      })
+      .filter(Boolean);
+    // Deduplicate by term (case-insensitive)
+    const map = new Map();
+    for (const it of items) {
+      const key = it.term.toLowerCase();
+      const ex = map.get(key);
+      if (!ex || it.activateAt < ex.activateAt) map.set(key, it);
+    }
+    return Array.from(map.values());
+  } catch {
+    return [];
+  }
+}
+
+async function saveBlacklist(list) {
+  try {
+    const map = new Map();
+    for (const it of list) {
+      if (!it || !it.term) continue;
+      const term = String(it.term).trim();
+      if (!term) continue;
+      const at = Number(it.activateAt || 0);
+      const norm = { term, activateAt: Number.isFinite(at) ? at : 0 };
+      const key = term.toLowerCase();
+      const ex = map.get(key);
+      if (!ex || norm.activateAt < ex.activateAt) map.set(key, norm);
+    }
+    const data = JSON.stringify(Array.from(map.values()));
+    await safeSetItem(BL_KEY, data);
+  } catch {}
 }
 
 // --- uBlock per-domain OFF list ---
@@ -761,6 +819,109 @@ function isUrlAllowed(urlStr) {
   }
 }
 
+function getActiveBlacklistTerms() {
+  try {
+    const terms = loadBlacklist().filter(isActive).map((x) => String(x.term || '').trim()).filter(Boolean);
+    // Normalize and dedupe case-insensitively
+    const seen = new Set();
+    const out = [];
+    for (const t of terms) {
+      const key = t.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const isPhrase = /\s/.test(t);
+      out.push({ term: t, phrase: isPhrase });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function checkBlacklistForWebView(el) {
+  try {
+    if (!el || typeof el.executeJavaScript !== 'function') return;
+    const url = el.getURL?.() || '';
+    if (!url || url === 'about:blank') return;
+    // Skip AI chat pages and non-http(s)
+    try {
+      const u = new URL(url);
+      if (!(u.protocol === 'http:' || u.protocol === 'https:')) return;
+    } catch { return; }
+    const terms = getActiveBlacklistTerms();
+    if (!terms.length) return;
+
+    const payload = terms.map(t => ({ term: String(t.term), phrase: !!t.phrase }));
+    const js = `(() => {
+      try {
+        const TERMS = ${JSON.stringify(payload)};
+        const title = String(document.title || '').toLowerCase();
+        const body = document.body;
+        const txt = String(body ? (body.innerText || body.textContent || '') : (document.documentElement?.innerText || ''));
+        const hay = txt.toLowerCase();
+        function isWord(ch) { return /[A-Za-z0-9_]/.test(ch || ''); }
+        function containsWhole(h, nd) {
+          if (!nd) return false;
+          let i = h.indexOf(nd);
+          while (i !== -1) {
+            const prev = i > 0 ? h[i - 1] : '';
+            const next = i + nd.length < h.length ? h[i + nd.length] : '';
+            if (!isWord(prev) && !isWord(next)) return true;
+            i = h.indexOf(nd, i + 1);
+          }
+          return false;
+        }
+        for (const t of TERMS) {
+          const needle = String(t.term || '').toLowerCase();
+          if (!needle) continue;
+          if (t.phrase) {
+            if (hay.includes(needle) || title.includes(needle)) return t.term;
+          } else {
+            if (containsWhole(hay, needle) || containsWhole(title, needle)) return t.term;
+          }
+        }
+        return null;
+      } catch { return null; }
+    })();`;
+
+    const found = await el.executeJavaScript(js, true).catch(() => null);
+    if (found) {
+      try { debugLog('blacklist-hit', { id: viewId(el), term: String(found) }); } catch {}
+      await handleBlacklistHit(el, String(found));
+    } else {
+      try { debugLog('blacklist-scan-clear', { id: viewId(el), terms: terms.length }); } catch {}
+    }
+  } catch {}
+}
+
+async function handleBlacklistHit(el, term) {
+  try {
+    const msg = `${term} blacklist word/phrase was found in the page and thus closed`;
+    // Close: if active view, remove it. If primary, navigate to about:blank.
+    const isVisible = (el === getVisibleWebView());
+    const aid = findActiveIdByWebView(el);
+    if (aid) {
+      try {
+        activeLocations.delete(String(aid));
+        activeMru = activeMru.filter((x) => x !== String(aid) && activeLocations.has(x));
+      } catch {}
+      try { el.remove(); } catch {}
+      updateActiveCountBubble();
+      persistActiveSessions().catch(() => {});
+      if (isVisible) {
+        const dest = ensurePrimaryWebView();
+        switchToWebView(dest);
+      }
+    } else {
+      try { el.stop?.(); } catch {}
+      try { el.setAttribute('src', 'about:blank'); } catch { try { el.src = 'about:blank'; } catch {} }
+      setLastAllowed(el, 'about:blank');
+      if (isVisible) updateAddressBarWithURL('about:blank');
+    }
+    showBanner(msg, 'error', 8000);
+  } catch {}
+}
+
 let bannerTimeout = null;
 let currentBannerAction = null; // Store the current action function for Enter key confirmation
 
@@ -918,8 +1079,10 @@ const sortToggle = document.getElementById('sort-toggle');
 
 // Settings tabs
 const whitelistTab = document.getElementById('whitelist-tab');
+const blacklistTab = document.getElementById('blacklist-tab');
 const llmTab = document.getElementById('llm-tab');
 const whitelistContent = document.getElementById('whitelist-content');
+const blacklistContent = document.getElementById('blacklist-content');
 const llmContent = document.getElementById('llm-content');
 
 // LLM Settings
@@ -958,6 +1121,7 @@ function startCountdown() {
   countdownInterval = setInterval(() => {
     if (!settingsView || settingsView.classList.contains('hidden')) return;
     renderWhitelist();
+    renderBlacklist?.();
     renderDelayControls?.();
     renderLLMSettings?.();
   }, 1000);
@@ -1005,6 +1169,115 @@ function autosizeDomainInput() {
     domainInput.style.height = `${next}px`;
     domainInput.style.overflowY = needed > maxPx ? 'auto' : 'hidden';
   } catch {}
+}
+
+// Blacklist UI elements
+const addBlacklistForm = document.getElementById('add-blacklist-form');
+const blacklistInput = document.getElementById('blacklist-input');
+const blacklistList = document.getElementById('blacklist-list');
+
+function autosizeBlacklistInput() {
+  if (!blacklistInput) return;
+  try {
+    const cs = window.getComputedStyle(blacklistInput);
+    const lh = parseFloat(cs.lineHeight) || 20;
+    const padTop = parseFloat(cs.paddingTop || '0');
+    const padBot = parseFloat(cs.paddingBottom || '0');
+    const borderTop = parseFloat(cs.borderTopWidth || '0');
+    const borderBot = parseFloat(cs.borderBottomWidth || '0');
+    const maxPx = Math.round(lh * 10 + padTop + padBot + borderTop + borderBot);
+    blacklistInput.style.height = '0px';
+    const sh = blacklistInput.scrollHeight;
+    const needed = sh + borderTop + borderBot;
+    const next = Math.min(needed, maxPx);
+    blacklistInput.style.height = `${next}px`;
+    blacklistInput.style.overflowY = needed > maxPx ? 'auto' : 'hidden';
+  } catch {}
+}
+
+function parseBlacklistTerms(raw) {
+  try {
+    const s = String(raw || '');
+    const out = [];
+    // Match quoted phrases or bare tokens; supports "...", '...'
+    const re = /"([^"]+)"|'([^']+)'|([^\s,\n]+)/g;
+    let m;
+    while ((m = re.exec(s)) !== null) {
+      const term = (m[1] || m[2] || m[3] || '').trim();
+      if (term) out.push(term);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function renderBlacklist() {
+  if (!blacklistList) return;
+  const list = loadBlacklist();
+  const raw = String(blacklistInput?.value || '');
+  const parts = parseBlacklistTerms(raw).map((t) => t.toLowerCase());
+  const q = (parts[parts.length - 1] || '').trim();
+
+  // Preserve insertion order
+  const recencyIndex = new Map(list.map((it, i) => [it.term.toLowerCase(), i]));
+
+  let entries = [];
+  if (!q) {
+    entries = list
+      .map((it) => ({ item: it, order: recencyIndex.get(it.term.toLowerCase()) || 0 }))
+      .sort((a, b) => b.order - a.order);
+  } else {
+    entries = list
+      .filter((it) => it.term.toLowerCase().includes(q))
+      .map((it) => ({ item: it, order: recencyIndex.get(it.term.toLowerCase()) || 0 }))
+      .sort((a, b) => b.order - a.order);
+  }
+
+  blacklistList.innerHTML = '';
+  if (entries.length === 0) {
+    const li = document.createElement('li');
+    if (list.length === 0 && !q) {
+      li.textContent = 'No terms added yet.';
+    } else {
+      li.textContent = 'No matching terms.';
+    }
+    blacklistList.appendChild(li);
+  } else {
+    entries.forEach(({ item }) => {
+      const li = document.createElement('li');
+      li.tabIndex = 0;
+
+      const left = document.createElement('span');
+      left.className = 'domain';
+      left.textContent = item.term;
+
+      const right = document.createElement('span');
+      right.className = 'right';
+      const remaining = (item.activateAt || 0) - Date.now();
+      if (remaining > 0) {
+        const cd = document.createElement('span');
+        cd.className = 'countdown';
+        cd.textContent = fmtRemaining(remaining);
+        right.appendChild(cd);
+      }
+
+      const btn = document.createElement('button');
+      btn.className = 'remove';
+      btn.textContent = 'Remove';
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const next = loadBlacklist().filter((d) => d.term !== item.term);
+        await saveBlacklist(next);
+        renderBlacklist();
+      });
+      right.appendChild(btn);
+
+      li.appendChild(left);
+      li.appendChild(right);
+      blacklistList.appendChild(li);
+    });
+  }
 }
 
 function renderWhitelist() {
@@ -1261,6 +1534,80 @@ if (domainInput) {
   });
 }
 
+// Blacklist: submit handler
+if (addBlacklistForm) {
+  addBlacklistForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const raw = String(blacklistInput?.value || '');
+    const tokens = parseBlacklistTerms(raw).map((s) => s.trim()).filter(Boolean);
+    if (tokens.length === 0) {
+      showBanner('Enter a term or "phrase" to blacklist', 'error');
+      return;
+    }
+    const bl = loadBlacklist();
+    const existing = new Set(bl.map((it) => it.term.toLowerCase()));
+    const toAdd = [];
+    const seen = new Set();
+    for (const t of tokens) {
+      const key = t.toLowerCase();
+      if (!key) continue;
+      if (existing.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      toAdd.push(t);
+    }
+    if (toAdd.length === 0) {
+      showBanner('No new terms to add');
+      return;
+    }
+    const delayMin = getDelayMinutes();
+    const now = Date.now();
+    for (const term of toAdd) {
+      const activateAt = delayMin > 0 ? now + delayMin * 60 * 1000 : 0;
+      bl.push({ term, activateAt });
+    }
+    await saveBlacklist(bl);
+    renderBlacklist();
+    if (delayMin > 0) {
+      showBanner(`Added ${toAdd.length} term(s). Activates in ${delayMin} min`);
+    } else {
+      showBanner(`Added ${toAdd.length} term(s) to blacklist`);
+    }
+    if (blacklistInput) {
+      blacklistInput.value = '';
+      try { autosizeBlacklistInput(); } catch {}
+    }
+  });
+}
+
+// Blacklist input behaviors
+if (blacklistInput) {
+  blacklistInput.addEventListener('input', () => {
+    try { autosizeBlacklistInput(); } catch {}
+    renderBlacklist();
+  });
+  blacklistInput.addEventListener('paste', (e) => {
+    try {
+      const dt = e.clipboardData || window.clipboardData;
+      const text = dt?.getData('text');
+      if (!text) return;
+      // Let parseBlacklistTerms handle quotes; normalize newlines and commas to spaces
+      e.preventDefault();
+      const start = blacklistInput.selectionStart ?? blacklistInput.value.length;
+      const end = blacklistInput.selectionEnd ?? start;
+      const norm = String(text).replace(/\r\n?/g, '\n');
+      const tokens = parseBlacklistTerms(norm);
+      const insert = tokens.join('\n');
+      const before = blacklistInput.value.slice(0, start);
+      const after = blacklistInput.value.slice(end);
+      blacklistInput.value = before + insert + after;
+      const pos = before.length + insert.length;
+      blacklistInput.setSelectionRange?.(pos, pos);
+      autosizeBlacklistInput();
+      renderBlacklist();
+    } catch {}
+  });
+}
+
 settingsBtn?.addEventListener('click', () => {
   const isHidden = !settingsView || settingsView.classList.contains('hidden');
   if (isHidden) {
@@ -1274,12 +1621,13 @@ settingsBtn?.addEventListener('click', () => {
         if (t) t.textContent = isRecent ? 'recent' : 'abc';
       }
     } catch {}
-    // Make sure we're on the whitelist tab when opening settings
+    // Default to whitelist tab when opening settings
     switchToTab('whitelist');
     renderWhitelist();
     initDelayControls?.();
     startCountdown();
     try { autosizeDomainInput(); } catch {}
+    try { autosizeBlacklistInput(); } catch {}
   } else {
     // Same effect as clicking the Settings back button
     setSettingsVisible(false);
@@ -2010,15 +2358,22 @@ async function toggleElementSelectMode() {
     // Only trigger when focus is within settings (e.g., list or textarea)
     if (!settingsView.contains(active)) return;
     // If focused element is another input/textarea and isn't our domainInput, ignore
-    if (active && active !== domainInput && isFocusableInput(active)) return;
-    const hasText = String(domainInput?.value || '').trim().length > 0;
+    if (active && isFocusableInput(active) && active !== domainInput && active !== blacklistInput) return;
+
+    // Decide which form to submit based on visible tab/content
+    const isWL = whitelistContent?.classList?.contains('active');
+    const isBL = blacklistContent?.classList?.contains('active');
+    const wlText = String(domainInput?.value || '').trim();
+    const blText = String(blacklistInput?.value || '').trim();
+    const targetForm = isBL ? addBlacklistForm : addDomainForm;
+    const hasText = isBL ? blText.length > 0 : wlText.length > 0;
     if (!hasText) return;
     e.preventDefault();
-    if (typeof addDomainForm?.requestSubmit === 'function') {
-      addDomainForm.requestSubmit();
+    if (typeof targetForm?.requestSubmit === 'function') {
+      targetForm.requestSubmit();
     } else {
       const evt = new Event('submit', { cancelable: true, bubbles: true });
-      addDomainForm?.dispatchEvent(evt);
+      targetForm?.dispatchEvent(evt);
     }
   }
   document.addEventListener('keydown', handler, true);
@@ -2037,8 +2392,8 @@ async function toggleElementSelectMode() {
 // Settings Tab Management
 function switchToTab(tabName) {
   // Update tab buttons
-  const tabs = [whitelistTab, llmTab];
-  const contents = [whitelistContent, llmContent];
+  const tabs = [whitelistTab, blacklistTab, llmTab];
+  const contents = [whitelistContent, blacklistContent, llmContent];
   
   tabs.forEach(tab => tab?.classList.remove('active'));
   contents.forEach(content => content?.classList.remove('active'));
@@ -2046,6 +2401,11 @@ function switchToTab(tabName) {
   if (tabName === 'llm') {
     llmTab?.classList.add('active');
     llmContent?.classList.add('active');
+  } else if (tabName === 'blacklist') {
+    blacklistTab?.classList.add('active');
+    blacklistContent?.classList.add('active');
+    renderBlacklist();
+    try { autosizeBlacklistInput(); } catch {}
   } else {
     whitelistTab?.classList.add('active');
     whitelistContent?.classList.add('active');
@@ -2065,6 +2425,10 @@ async function loadLLMSettingsToForm() {
 // Tab event listeners
 whitelistTab?.addEventListener('click', () => {
   switchToTab('whitelist');
+});
+
+blacklistTab?.addEventListener('click', () => {
+  switchToTab('blacklist');
 });
 
 llmTab?.addEventListener('click', () => {
@@ -2681,6 +3045,11 @@ function wireWebView(el) {
         if (Array.isArray(rules) && rules.length) await setWebViewDomainRemovalRules(el, rules);
       } catch {}
     })();
+
+    // Check blacklist terms as soon as DOM is ready
+    (async () => {
+      try { await checkBlacklistForWebView(el); } catch {}
+    })();
   });
 
   // Track page title changes so suggestions stay fresh
@@ -2753,6 +3122,11 @@ function wireWebView(el) {
         const rules = await getDomainRemovalRules(domain);
         if (Array.isArray(rules) && rules.length) await setWebViewDomainRemovalRules(el, rules);
       } catch {}
+    })();
+
+    // Check blacklist after full load, too
+    (async () => {
+      try { await checkBlacklistForWebView(el); } catch {}
     })();
   });
   el.addEventListener('did-fail-load', (e) => {

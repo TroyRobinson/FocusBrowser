@@ -88,6 +88,7 @@
         <!-- Settings Tabs -->
         <div class="settings-tabs">
           <button id="whitelist-tab" class="tab-button active" type="button">Whitelist</button>
+          <button id="blacklist-tab" class="tab-button" type="button">Blacklist</button>
           <button id="llm-tab" class="tab-button" type="button">LLM</button>
         </div>
 
@@ -112,6 +113,23 @@
               <button id="add-domain-button" class="go-button" type="submit">Add</button>
             </form>
             <ul id="domain-list" class="domain-list" aria-label="Whitelisted domains"></ul>
+          </div>
+        </div>
+
+        <!-- Blacklist Tab Content -->
+        <div id="blacklist-content" class="tab-content">
+          <div class="settings-section">
+            <div class="settings-subtitle-row">
+              <h2 class="settings-subtitle">Blocked Content</h2>
+            </div>
+            <p class="settings-help">
+              add term(s) to this list that are prohibited
+            </p>
+            <form id="add-blacklist-form" class="add-domain" autocomplete="off">
+              <textarea id="blacklist-input" class="address-input" placeholder='single word or "multi word phrase" (space, comma, or line separated)' aria-label="Add blacklist terms" rows="3" wrap="soft"></textarea>
+              <button id="add-blacklist-button" class="go-button" type="submit">Add</button>
+            </form>
+            <ul id="blacklist-list" class="domain-list" aria-label="Blacklisted terms"></ul>
           </div>
         </div>
 
