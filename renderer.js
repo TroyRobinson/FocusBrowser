@@ -3076,6 +3076,41 @@ function closeCurrentActive() {
   }
 }
 
+// Demote the currently visible active webview back to the primary (ephemeral) webview.
+// Preserves the page/content by reusing the same <webview> element, reassigning it as primary.
+function demoteCurrentActiveToPrimary() {
+  try {
+    const el = getVisibleWebView();
+    const aid = findActiveIdByWebView(el);
+    if (!aid) { return false; }
+
+    // Remove record from active locations and MRU
+    activeLocations.delete(String(aid));
+    activeMru = activeMru.filter((x) => x !== String(aid) && activeLocations.has(x));
+
+    // If a separate primary exists, remove it from the DOM to avoid duplicates
+    if (primaryWebView && primaryWebView !== el) {
+      try { primaryWebView.remove(); } catch {}
+      primaryWebView = null;
+    }
+
+    // Reassign this element to be the primary
+    try { el.id = 'webview'; } catch {}
+    primaryWebView = el;
+
+    // Update UI and persistence
+    updateActiveCountBubble();
+    persistActiveSessions().catch(() => {});
+    persistVisibleViewFor(el).catch(() => {});
+    // Ensure visibility state is consistent
+    switchToWebView(el);
+    return true;
+  } catch (err) {
+    debugLog('demoteCurrentActiveToPrimary: error', String(err && err.message || err));
+    return false;
+  }
+}
+
 function getActiveSuggestions(q) {
   const items = [];
   const query = String(q || '').trim();
@@ -3743,10 +3778,33 @@ function renderSuggestions(forceShowActive = false) {
     if (it.kind === 'active') {
       const left = document.createElement('div');
       left.className = 'line-left';
-      const strongFrag = renderHighlightedText(String(it.label), it.matches);
+
+      // Prepare display label for active suggestions. When the address bar is focused,
+      // show URL without protocol and use Title in the hint instead of "Active (Title)".
+      const originalLabel = String(it.label || '');
+      let removedPrefix = 0;
+      let displayLabel = originalLabel;
+      if (inputFocused) {
+        if (originalLabel.startsWith('https://')) { displayLabel = originalLabel.slice(8); removedPrefix = 8; }
+        else if (originalLabel.startsWith('http://')) { displayLabel = originalLabel.slice(7); removedPrefix = 7; }
+      }
+      // Adjust highlight indices to the possibly shortened display label
+      const labelMatches = Array.isArray(it.matches)
+        ? it.matches
+            .filter((idx) => idx >= 0 && idx < originalLabel.length)
+            .map((idx) => idx - removedPrefix)
+            .filter((idx) => idx >= 0)
+        : [];
+
+      const strongFrag = renderHighlightedText(displayLabel, labelMatches);
       const hint = document.createElement('span');
       hint.className = 'hint';
-      hint.textContent = `  — Active  ${it.detail ? `(${it.detail})` : ''}`;
+      if (inputFocused) {
+        // Desired: "URL -- Title" (using an em dash)
+        hint.textContent = it.detail ? `  — ${it.detail}` : '';
+      } else {
+        hint.textContent = `  — Active  ${it.detail ? `(${it.detail})` : ''}`;
+      }
       const suffix = document.createElement('span');
       suffix.className = 'hint open-suffix';
       // placeholder, updated by updateSuggestionOpenSuffix
@@ -3984,8 +4042,22 @@ input.addEventListener('input', () => {
   clearBannerAction(); // Clear banner action when user types
   renderSuggestions(); 
 });
-input.addEventListener('focus', () => { if (forceActiveSuggestionsOnNextFocus) { forceActiveSuggestionsOnNextFocus = false; renderSuggestions(true); } else { renderSuggestions(); } });
-input.addEventListener('click', () => { hideExtensionsPopover(); });
+// When the address bar gains focus (via click or keyboard),
+// surface active locations if empty; otherwise show typing-based suggestions.
+input.addEventListener('focus', () => {
+  try { forceActiveSuggestionsOnNextFocus = false; } catch {}
+  const hasQuery = !!String(input?.value || '').trim();
+  if (hasQuery) {
+    renderSuggestions();
+  } else {
+    renderSuggestions(true);
+  }
+});
+input.addEventListener('click', () => {
+  try { hideExtensionsPopover(); } catch {}
+  // If user clicks the address bar again, reshow active location suggestions
+  try { renderSuggestions(true); } catch {}
+});
 
 // First-click selects all: on the first mouse click after focus, select-all; subsequent clicks place caret.
 let __fbAddressBarSelectedOnce = false;
@@ -4009,16 +4081,34 @@ input.addEventListener('mousedown', (e) => {
   } catch {}
 });
 
-// Active count bubble click - show active locations in suggestions
+// Active count bubble click: toggle pin/unpin current view and show suggestions.
+// Hold a modifier (Meta/Ctrl/Shift/Alt) to only show the suggestions (no toggle).
 activeCountBubble?.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
   try {
-    // Focus input and trigger suggestions showing active locations
-    if (input) {
-      input.focus();
-      renderSuggestions(true); // Force show active locations
+    const onlySuggestions = !!(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey);
+    if (!onlySuggestions) {
+      const current = getVisibleWebView();
+      const aid = findActiveIdByWebView(current);
+      if (aid) {
+        // Unpin: demote to primary without losing content
+        const ok = demoteCurrentActiveToPrimary();
+        if (ok) {
+          updateActiveCountBubble(true);
+          try { showBanner('Unpinned current tab'); } catch {}
+        }
+      } else {
+        // Pin: park current as active
+        const id = parkCurrentAsActive(true);
+        if (id) {
+          updateActiveCountBubble(true);
+          try { showBanner('Pinned current tab'); } catch {}
+        }
+      }
     }
+    // Always show suggestions after click (reflecting updated list)
+    if (input) { input.focus(); renderSuggestions(true); }
   } catch {}
 });
 
