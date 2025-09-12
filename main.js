@@ -194,6 +194,10 @@ function createWindow() {
         event.preventDefault();
         const action = input.shift ? 'find-prev' : 'find-next';
         sendNav(action);
+      } else if (key === 't' || key === 'T') {
+        event.preventDefault();
+        const action = input.shift ? 'new-blank-active' : 'new-blank';
+        sendNav(action);
       }
     } catch {}
   });
@@ -286,6 +290,10 @@ app.whenReady().then(() => {
             } else if (key === 'F3') {
               event.preventDefault();
               const action = input.shift ? 'find-prev' : 'find-next';
+              sendNav(action);
+            } else if (mod && (key === 't' || key === 'T')) {
+              event.preventDefault();
+              const action = input.shift ? 'new-blank-active' : 'new-blank';
               sendNav(action);
             } else if (key === 'Escape') {
               // Let the page also handle ESC; forward stop and selection-exit

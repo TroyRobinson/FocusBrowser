@@ -2979,7 +2979,7 @@ function createNewActiveBlankAndSwitch(makeActive = false) {
       persistActiveSessions().catch(() => {});
       switchToWebView(el);
       leaveSettingsIfOpen();
-      try { if (input) { input.value = ''; input.focus(); input.select?.(); } } catch {}
+      try { if (input) { input.value = ''; input.focus(); input.select?.(); __heldShift = false; __heldMetaCtrl = false; updateSuggestionOpenSuffix(); } } catch {}
       return id;
     }
     // Ephemeral (non-persistent)
@@ -2988,7 +2988,7 @@ function createNewActiveBlankAndSwitch(makeActive = false) {
     try { primary.setAttribute('src', 'about:blank'); } catch { primary.src = 'about:blank'; }
     switchToWebView(primary);
     leaveSettingsIfOpen();
-    try { if (input) { input.value = ''; input.focus(); input.select?.(); } } catch {}
+    try { if (input) { input.value = ''; input.focus(); input.select?.(); __heldShift = false; __heldMetaCtrl = false; updateSuggestionOpenSuffix(); } } catch {}
     return 'primary';
   } catch (err) {
     debugLog('createNewActiveBlankAndSwitch: error', String(err && err.message || err));
@@ -4027,8 +4027,19 @@ function openSuffixText() {
 function updateSuggestionOpenSuffix() {
   try {
     if (!suggestionsEl) return;
+    // Only show suffixes when the current view has a non-blank destination
+    let showSuffix = false;
+    try {
+      const v = getVisibleWebView?.();
+      const url = (v?.getURL?.() || '').trim();
+      // Prefer last allowed if current URL is empty (e.g., just created)
+      const last = typeof getLastAllowed === 'function' ? (getLastAllowed(v) || '') : '';
+      const effective = url || last;
+      showSuffix = !!(effective && effective !== 'about:blank');
+    } catch {}
+
     const children = Array.from(suggestionsEl.children);
-    const text = openSuffixText();
+    const text = showSuffix ? openSuffixText() : '';
     children.forEach((li, idx) => {
       const spans = li.querySelectorAll('.open-suffix');
       spans.forEach((s) => { s.textContent = ''; });
@@ -4666,6 +4677,12 @@ try {
         break;
       case 'find-prev':
         try { if (!findOpen) openFindBar(); doFind({ backward: true }); } catch {}
+        break;
+      case 'new-blank-active':
+        try { createNewActiveBlankAndSwitch(true); } catch {}
+        break;
+      case 'new-blank':
+        try { createNewActiveBlankAndSwitch(false); } catch {}
         break;
       default:
         break;
