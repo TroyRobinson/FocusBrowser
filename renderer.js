@@ -3972,7 +3972,9 @@ function updateActiveCountBubble(flash = false) {
         }, 300);
       }
     } else {
-      activeCountBubble.classList.add('hidden');
+      // Show an outline "0" bubble by default to indicate no active locations yet
+      activeCountBubble.textContent = '0';
+      activeCountBubble.classList.remove('hidden');
     }
   } catch {}
 }
@@ -4045,6 +4047,8 @@ input.addEventListener('input', () => {
 // When the address bar gains focus (via click or keyboard),
 // surface active locations if empty; otherwise show typing-based suggestions.
 input.addEventListener('focus', () => {
+  // If focus was caused by a mouse interaction, skip here; the click handler will render once to avoid flicker
+  if (typeof __fbFocusByMouseDown !== 'undefined' && __fbFocusByMouseDown) { __fbFocusByMouseDown = false; return; }
   try { forceActiveSuggestionsOnNextFocus = false; } catch {}
   const hasQuery = !!String(input?.value || '').trim();
   if (hasQuery) {
@@ -4061,6 +4065,8 @@ input.addEventListener('click', () => {
 
 // First-click selects all: on the first mouse click after focus, select-all; subsequent clicks place caret.
 let __fbAddressBarSelectedOnce = false;
+// Track if focus is from mouse to prevent focus+click double render flicker
+let __fbFocusByMouseDown = false;
 
 input.addEventListener('blur', () => {
   try { 
@@ -4071,6 +4077,7 @@ input.addEventListener('blur', () => {
 
 input.addEventListener('mousedown', (e) => {
   try {
+    __fbFocusByMouseDown = true;
     if (!__fbAddressBarSelectedOnce) {
       e.preventDefault();
       input.focus();
