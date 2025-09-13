@@ -9,7 +9,10 @@
     "forge:start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
-    "publish": "electron-forge publish"
+    "publish": "electron-forge publish",
+    "icons:svg2png": "sharp -i assets/icon.svg -o assets -f png --density 384 resize 1024 1024",
+    "icons:icns": "scripts/build-icns.sh",
+    "icons:build": "npm run icons:svg2png && npm run icons:icns"
   },
   "keywords": [],
   "author": "",
@@ -17,6 +20,7 @@
   "description": "",
   "devDependencies": {
     "electron": "^27.3.11",
+    "sharp-cli": "^2.1.0",
     "@electron-forge/cli": "^6",
     "@electron-forge/maker-dmg": "^6",
     "@electron-forge/maker-zip": "^6",
@@ -33,7 +37,8 @@
         "appBundleId": "com.focusbrowser.app",
         "appCategoryType": "public.app-category.productivity",
         "asar": true,
-        "osxSign": false
+        "osxSign": false,
+        "icon": "assets/icon"
       },
       "makers": [
         {
