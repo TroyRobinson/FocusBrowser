@@ -297,11 +297,33 @@ textarea.address-input {
 .suggestions li .mini-close {
   flex: 0 0 auto;
   margin-left: auto;
-  padding: 2px 6px;
-  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 1.15em;
+  border-radius: 7px;
   border: 1px solid var(--input-border);
   background: var(--input-bg);
-  color: var(--fg);
+  color: #9bb2ff; /* light-accent-blue for the “x” */
+}
+.suggestions li .mini-close:hover {
+  border-color: var(--accent);
+  color: #b7c5ff;
+}
+
+/* Minimal inline "x" for whitelist suggestion items */
+.suggestions li .mini-x {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 4px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+.suggestions li .mini-x:hover {
+  color: #ffffff;
 }
 
 .suggestions li.selected {
@@ -310,6 +332,10 @@ textarea.address-input {
 
 .suggestions li .hint {
   color: var(--muted);
+}
+/* Accent-blueish-grey for active suggestion subtitle (— Title) */
+.suggestions li .hint.active-hint {
+  color: #8fa3ff;
 }
 
 .suggestions li strong.match {

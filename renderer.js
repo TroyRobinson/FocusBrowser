@@ -4221,7 +4221,7 @@ function renderSuggestions(forceShowActive = false) {
 
       const strongFrag = renderHighlightedText(displayLabel, labelMatches);
       const hint = document.createElement('span');
-      hint.className = 'hint';
+      hint.className = 'hint active-hint';
       if (inputFocused) {
         // Desired: "URL -- Title" (using an em dash)
         hint.textContent = it.detail ? `  — ${it.detail}` : '';
@@ -4254,14 +4254,32 @@ function renderSuggestions(forceShowActive = false) {
       left.appendChild(suffix);
       li.appendChild(left);
     } else {
-      const left = document.createElement('div');
-      left.className = 'line-left';
-      left.appendChild(renderHighlightedText(String(it.label), it.matches));
-      const suffix = document.createElement('span');
-      suffix.className = 'hint open-suffix';
-      left.appendChild(suffix);
-      li.appendChild(left);
-    }
+    const left = document.createElement('div');
+    left.className = 'line-left';
+    left.appendChild(renderHighlightedText(String(it.label), it.matches));
+    const suffix = document.createElement('span');
+    suffix.className = 'hint open-suffix';
+    left.appendChild(suffix);
+    li.appendChild(left);
+
+        // Inline remove "x" for whitelist domain suggestions
+        const del = document.createElement('span');
+        del.className = 'mini-x';
+        del.title = 'Remove from whitelist';
+        del.textContent = '×';
+        del.addEventListener('mousedown', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          try {
+            const host = String(it.value || it.label || '').toLowerCase();
+            const next = loadWhitelist().filter((d) => String(d.domain || '').toLowerCase() !== host);
+            await saveWhitelist(next);
+            try { if (settingsView && !settingsView.classList.contains('hidden')) renderWhitelist(); } catch {}
+            renderSuggestions();
+          } catch {}
+        });
+        li.appendChild(del);
+      }
     li.addEventListener('mouseenter', () => { suggSelected = idx; updateSuggestionSelection(); });
     li.addEventListener('mousedown', (e) => { e.preventDefault(); acceptSuggestion(idx, { openInNew: !!e.shiftKey, newIsActive: !!(e.shiftKey && (e.metaKey || e.ctrlKey)) }); });
     suggestionsEl.appendChild(li);
