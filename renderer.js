@@ -4174,11 +4174,12 @@ function renderSuggestions(forceShowActive = false) {
         ...active
       ];
     } else {
-      // Default behavior: show active, then typed option (only when URL-like typing), then fuzzy matches
-      // Show the custom submit (typed) option when the user is typing a URL-like input:
+      // Default behavior: show active, then typed option, then fuzzy matches
+      // Show the custom submit (typed) option when the user is entering terms or a URL-like input:
+      // - AI query terms (single word that isn't URL-like, multi-word, or with '?')
       // - pressed space after a term (trailing space), e.g. "word "
       // - contains a period (typing a domain), e.g. "google.com", "example."
-      const showTyped = raw.endsWith(' ') || raw.includes('.');
+      const showTyped = isAIQuery(q) || raw.endsWith(' ') || raw.includes('.');
       items = [
         ...active,
         ...(showTyped ? [{ kind: 'typed', value: q, label: q, typed: true }] : []),
@@ -4487,13 +4488,42 @@ function updateSuggestionOpenSuffix() {
   try {
     if (!suggestionsEl) return;
     const children = Array.from(suggestionsEl.children);
-    const text = openSuffixText();
+
+    // If Shift (or Cmd/Ctrl+Shift) is held, show the existing open-in-new suffix only
+    const modText = openSuffixText();
+
+    // Detect if current visible view is an AI chat thread (affects typed suffix -> "— ask")
+    let inAIChat = false;
+    try {
+      const v = getVisibleWebView?.();
+      const url = v?.getURL?.() || '';
+      inAIChat = isAIChatURL(url);
+    } catch {}
+
     children.forEach((li, idx) => {
       const spans = li.querySelectorAll('.open-suffix');
       spans.forEach((s) => { s.textContent = ''; });
-      if (idx === suggSelected && text) {
-        const s = li.querySelector('.open-suffix');
-        if (s) s.textContent = ` ${text}`;
+
+      if (idx !== suggSelected) return;
+
+      const s = li.querySelector('.open-suffix');
+      if (!s) return;
+
+      // Modifier-held case takes precedence
+      if (modText) { s.textContent = ` ${modText}`; return; }
+
+      // Normal selection: append contextual hint based on item kind
+      const it = suggItems?.[idx];
+      const kind = it?.kind;
+      if (kind === 'active') {
+        s.textContent = ' — open';
+      } else if (kind === 'typed') {
+        const value = (it && typeof it.value === 'string') ? it.value : '';
+        const willChat = isAIQuery(value);
+        s.textContent = willChat ? ' — ask' : ' — load';
+      } else {
+        // domain and any other regular items
+        s.textContent = ' — load';
       }
     });
   } catch {}
@@ -4640,12 +4670,14 @@ input.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === 'ArrowDown') {
+    e.preventDefault(); // Keep caret position in the address bar
     clearBannerAction(); // Clear banner action on arrow navigation
     if (!suggestionsEl || suggestionsEl.classList.contains('hidden')) { renderSuggestions(); return; }
     const last = suggItems.length - 1;
     suggSelected = Math.min(last, suggSelected + 1);
     updateSuggestionSelection();
   } else if (e.key === 'ArrowUp') {
+    e.preventDefault(); // Keep caret position in the address bar
     clearBannerAction(); // Clear banner action on arrow navigation
     const min = 0;
     suggSelected = Math.max(min, suggSelected - 1);
