@@ -12,6 +12,15 @@ Commands
   - Also produces ZIP: out/make/zip
   - First run: Control-click the app in Applications, choose Open (unsigned)
 
+Build environment notes
+
+- Keep Node version consistent across install and make. If you change Node versions (nvm/asdf/homebrew), native deps compiled earlier may no longer load during the DMG step.
+- After switching Node, do one of the following before running make:
+  - Quick fix for DMG maker: HOME=$(pwd)/.home npm rebuild macos-alias
+  - Full reset: rm -rf node_modules package-lock.json && HOME=$(pwd)/.home npm install
+    - Verify: node -p "process.version + ' modules=' + process.versions.modules"
+      (the rebuild will match the current Node’s modules value)
+
 Notes
 
 - No menus or keyboard shortcuts are registered; DevTools are disabled.
@@ -25,4 +34,7 @@ Troubleshooting
   - **macOS**: `rm -rf ~/Library/Application\ Support/focus-browser`
   - **Windows**: `rmdir /s /q "%APPDATA%\focus-browser"`
   - **Linux**: `rm -rf ~/.config/focus-browser`
- - **DMG build ABI error**: If you see a native module "NODE_MODULE_VERSION" mismatch (e.g., macos-alias), run `HOME=$(pwd)/.home npm rebuild` and retry the make command.
+ - **DMG build ABI error**: If you see a native module "NODE_MODULE_VERSION" mismatch (e.g., macos-alias), it means the native binary was compiled for a different Node version than the one running Electron Forge.
+   - Fix (fast): `HOME=$(pwd)/.home npm rebuild macos-alias`
+   - Fix (clean): `rm -rf node_modules package-lock.json && HOME=$(pwd)/.home npm install`
+   - Tip: use `nvm` to pin a single Node version for this project to avoid repeats.
