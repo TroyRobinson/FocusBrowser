@@ -3987,6 +3987,8 @@ function navigate(opts = {}) {
       debugLog('watchdog (in-place): after set src', { id: viewId(dest), url: viewURL(dest), isLoading: !!dest?.isLoading?.() });
     }, 1200);
   }
+  // Clear modifier flags after in-place navigation to avoid suffix carryover
+  try { clearHeldModifiersAndSuffix(); } catch {}
 }
 
 // Suggestions / fuzzy search
@@ -4460,8 +4462,6 @@ newActiveBtn?.addEventListener('click', (e) => {
   try { hideExtensionsPopover(); } catch {}
   try { hideSuggestions(); } catch {}
   createNewActiveBlankAndSwitch(!!e.shiftKey);
-  // After creating a new blank, reset modifiers for next suggestions
-  try { clearHeldModifiersAndSuffix(); } catch {}
 });
 
 
@@ -4486,19 +4486,8 @@ function openSuffixText() {
 function updateSuggestionOpenSuffix() {
   try {
     if (!suggestionsEl) return;
-    // Only show suffixes when the current view has a non-blank destination
-    let showSuffix = false;
-    try {
-      const v = getVisibleWebView?.();
-      const url = (v?.getURL?.() || '').trim();
-      // Prefer last allowed if current URL is empty (e.g., just created)
-      const last = typeof getLastAllowed === 'function' ? (getLastAllowed(v) || '') : '';
-      const effective = url || last;
-      showSuffix = !!(effective && effective !== 'about:blank');
-    } catch {}
-
     const children = Array.from(suggestionsEl.children);
-    const text = showSuffix ? openSuffixText() : '';
+    const text = openSuffixText();
     children.forEach((li, idx) => {
       const spans = li.querySelectorAll('.open-suffix');
       spans.forEach((s) => { s.textContent = ''; });
@@ -4643,12 +4632,10 @@ input.addEventListener('keydown', (e) => {
       return;
     }
     
-    if (suggSelected >= 0) {
+  if (suggSelected >= 0) {
       acceptSuggestion(suggSelected, { openInNew, newIsActive });
-      try { clearHeldModifiersAndSuffix(); } catch {}
     } else {
       navigate({ openInNew, newIsActive });
-      try { clearHeldModifiersAndSuffix(); } catch {}
     }
     return;
   }
@@ -5148,8 +5135,6 @@ try {
         try {
           // Ensure that after focusing, we show ALL active locations (unfiltered)
           forceActiveSuggestionsOnNextFocus = true;
-          // Reset modifiers so suffix does not reflect stale state
-          try { clearHeldModifiersAndSuffix(); } catch {}
           input?.focus?.();
           input?.select?.();
           __fbAddressBarSelectedOnce = true;
