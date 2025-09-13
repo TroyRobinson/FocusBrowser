@@ -3943,6 +3943,7 @@ function navigate(opts = {}) {
   if (target.startsWith('ai-chat://query/')) {
     const query = decodeURIComponent(target.replace('ai-chat://query/', ''));
     handleAIChat(query, opts);
+    try { if (openInNew || newIsActive) clearHeldModifiersAndSuffix(); } catch {}
     return;
   }
   
@@ -3957,6 +3958,7 @@ function navigate(opts = {}) {
     // Create a brand new active webview and navigate there
     const id = createActiveViewWithURL(target);
     debugLog('navigate new active', { id });
+    try { clearHeldModifiersAndSuffix(); } catch {}
     return;
   }
   if (openInNew && !newIsActive) {
@@ -3970,6 +3972,7 @@ function navigate(opts = {}) {
       setTimeout(() => { debugLog('watchdog (new-ephemeral): after set src', { id: viewId(primary), url: viewURL(primary), isLoading: !!primary?.isLoading?.() }); }, 1200);
     }
     switchToWebView(primary);
+    try { clearHeldModifiersAndSuffix(); } catch {}
     return;
   }
   // Default: reuse current webview (in-place)
@@ -4119,12 +4122,16 @@ function acceptSuggestion(idx, opts = {}) {
       try { parkCurrentAsActive(); } catch {}
     }
     switchToActive(it.id);
+    // After action, clear modifiers so suffix doesn't persist
+    try { clearHeldModifiersAndSuffix(); } catch {}
     return;
   }
   debugLog('acceptSuggestion -> nav', { value: it.value, openInNew, newIsActive });
   input.value = it.value;
   hideSuggestions();
   navigate({ openInNew, newIsActive });
+  // After navigation, clear modifiers immediately
+  try { clearHeldModifiersAndSuffix(); } catch {}
 }
 
 function renderSuggestions(forceShowActive = false) {
@@ -4453,12 +4460,23 @@ newActiveBtn?.addEventListener('click', (e) => {
   try { hideExtensionsPopover(); } catch {}
   try { hideSuggestions(); } catch {}
   createNewActiveBlankAndSwitch(!!e.shiftKey);
+  // After creating a new blank, reset modifiers for next suggestions
+  try { clearHeldModifiersAndSuffix(); } catch {}
 });
 
 
 // Input interactions
 let __heldShift = false;
 let __heldMetaCtrl = false;
+
+// Helper to reset modifier flags and refresh suffix display
+function clearHeldModifiersAndSuffix() {
+  try {
+    __heldShift = false;
+    __heldMetaCtrl = false;
+    updateSuggestionOpenSuffix();
+  } catch {}
+}
 
 function openSuffixText() {
   if (!__heldShift) return '';
@@ -4500,6 +4518,8 @@ input.addEventListener('input', () => {
 // surface active locations if empty; otherwise show typing-based suggestions.
 // If focus was triggered via Cmd/Ctrl+L, always show active locations once.
 input.addEventListener('focus', () => {
+  // Reset modifiers at the start of a new suggestion session
+  try { clearHeldModifiersAndSuffix(); } catch {}
   // If focus was caused by a mouse interaction, skip here; the click handler will render once to avoid flicker
   if (typeof __fbFocusByMouseDown !== 'undefined' && __fbFocusByMouseDown) { __fbFocusByMouseDown = false; return; }
 
@@ -4519,6 +4539,8 @@ input.addEventListener('focus', () => {
 });
 input.addEventListener('click', () => {
   try { hideExtensionsPopover(); } catch {}
+  // Fresh click session: prevent stale modifier suffix
+  try { clearHeldModifiersAndSuffix(); } catch {}
   // If user clicks the address bar again, reshow active location suggestions
   try { renderSuggestions(true); } catch {}
 });
@@ -4554,6 +4576,8 @@ activeCountBubble?.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
   try {
+    // Treat this as a fresh interaction
+    clearHeldModifiersAndSuffix();
     const onlySuggestions = !!(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey);
     if (!onlySuggestions) {
       const current = getVisibleWebView();
@@ -4582,8 +4606,9 @@ activeCountBubble?.addEventListener('click', (e) => {
 input.addEventListener('keydown', (e) => {
   try {
     if (document.activeElement === input) {
-      if (e.key === 'Shift') { __heldShift = true; }
-      if (e.key === 'Meta' || e.key === 'Control') { __heldMetaCtrl = true; }
+      // Reflect real-time state on any keydown; protects against missed keyup
+      __heldShift = !!e.shiftKey;
+      __heldMetaCtrl = !!(e.metaKey || e.ctrlKey);
       updateSuggestionOpenSuffix();
     }
   } catch {}
@@ -4620,8 +4645,10 @@ input.addEventListener('keydown', (e) => {
     
     if (suggSelected >= 0) {
       acceptSuggestion(suggSelected, { openInNew, newIsActive });
+      try { clearHeldModifiersAndSuffix(); } catch {}
     } else {
       navigate({ openInNew, newIsActive });
+      try { clearHeldModifiersAndSuffix(); } catch {}
     }
     return;
   }
@@ -4668,6 +4695,16 @@ try {
     } catch {}
   });
   input.addEventListener('blur', () => { try { __heldShift = false; __heldMetaCtrl = false; updateSuggestionOpenSuffix(); } catch {} });
+} catch {}
+
+// Window-level keyup as a safety net when input misses events (e.g., webview focus)
+try {
+  window.addEventListener('keyup', (e) => {
+    try {
+      if (e.key === 'Shift') { __heldShift = false; updateSuggestionOpenSuffix(); }
+      if (e.key === 'Meta' || e.key === 'Control') { __heldMetaCtrl = false; updateSuggestionOpenSuffix(); }
+    } catch {}
+  });
 } catch {}
 
 window.addEventListener('resize', () => {
@@ -5111,6 +5148,8 @@ try {
         try {
           // Ensure that after focusing, we show ALL active locations (unfiltered)
           forceActiveSuggestionsOnNextFocus = true;
+          // Reset modifiers so suffix does not reflect stale state
+          try { clearHeldModifiersAndSuffix(); } catch {}
           input?.focus?.();
           input?.select?.();
           __fbAddressBarSelectedOnce = true;
